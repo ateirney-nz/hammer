@@ -2634,6 +2634,52 @@ CREATE CHANGE STREAM CS2 FOR t2;
 				"DROP TABLE t1",
 			},
 		},
+		{
+			name: "ignore create proto bundle in from",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE PROTO BUNDLE (foo.bar);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{},
+		},
+		{
+			name: "ignore create proto bundle in to",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE PROTO BUNDLE (foo.bar);
+`,
+			expected: []string{},
+		},
+		{
+			name: "ignore create proto bundle in both",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE PROTO BUNDLE (foo.bar);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE PROTO BUNDLE (foo.bar, baz.qux);
+`,
+			expected: []string{},
+		},
 	}
 	for _, v := range values {
 		t.Run(v.name, func(t *testing.T) {

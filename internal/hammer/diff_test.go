@@ -2,19 +2,15 @@ package hammer_test
 
 import (
 	"context"
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/daichirata/hammer/internal/hammer"
 )
-
-type StringSource string
-
-func (s StringSource) String() string { return string(s) }
-func (s StringSource) DDL(_ context.Context, o *hammer.DDLOption) (hammer.DDL, error) {
-	return hammer.ParseDDL("string", s.String(), o)
-}
 
 func TestDiff(t *testing.T) {
 	values := []struct {
@@ -1834,7 +1830,7 @@ CREATE TABLE t1 (
 	t1_1 INT64 NOT NULL,
 ) PRIMARY KEY(t1_1);
 
-CREATE VIEW v1 
+CREATE VIEW v1
 SQL SECURITY INVOKER
 AS SELECT * FROM t1;
 `,
@@ -1859,7 +1855,7 @@ CREATE TABLE t1 (
 	t1_1 INT64 NOT NULL,
 ) PRIMARY KEY(t1_1);
 
-CREATE VIEW v1 
+CREATE VIEW v1
 SQL SECURITY INVOKER
 AS SELECT * FROM t1;
 `,
@@ -1874,7 +1870,7 @@ CREATE TABLE t1 (
 	t1_1 INT64 NOT NULL,
 ) PRIMARY KEY(t1_1);
 
-CREATE VIEW v1 
+CREATE VIEW v1
 SQL SECURITY INVOKER
 AS SELECT * FROM t1 WHERE t1_1 > 0;
 `,
@@ -1883,7 +1879,7 @@ CREATE TABLE t1 (
 	t1_1 INT64 NOT NULL,
 ) PRIMARY KEY(t1_1);
 
-CREATE VIEW v1 
+CREATE VIEW v1
 SQL SECURITY INVOKER
 AS SELECT * FROM t1;
 `,
@@ -3020,11 +3016,18 @@ CREATE PROTO BUNDLE (foo.bar, baz.qux);
 				t.Fatalf("unexpected error: %v", err)
 			}
 			actual := convertStrings(ddl)
-			if diff := cmp.Diff(v.expected, actual); diff != "" {
-				t.Errorf("(-want, +got)\n%s", diff)
+			if !slices.Equal(v.expected, actual) {
+				t.Error(formatDDLMismatch(v.expected, actual))
 			}
 		})
 	}
+}
+
+type StringSource string
+
+func (s StringSource) String() string { return string(s) }
+func (s StringSource) DDL(_ context.Context, o *hammer.DDLOption) (hammer.DDL, error) {
+	return hammer.ParseDDL("string", s.String(), o)
 }
 
 func convertStrings(ddl hammer.DDL) []string {
@@ -3033,4 +3036,26 @@ func convertStrings(ddl hammer.DDL) []string {
 		ret[i] = stmt.SQL()
 	}
 	return ret
+}
+
+func formatDDLMismatch(expected, actual []string) string {
+	var b, diffs strings.Builder
+	for _, blk := range []struct {
+		label string
+		stmts []string
+	}{{"want", expected}, {"got", actual}} {
+		fmt.Fprintf(&b, "\n--- %s (%d statement(s)) ---\n", blk.label, len(blk.stmts))
+		for i, s := range blk.stmts {
+			fmt.Fprintf(&b, "[%d] %s\n", i, strings.ReplaceAll(s, "\n", "\n    "))
+		}
+	}
+	for i := range min(len(expected), len(actual)) {
+		if d := cmp.Diff(strings.Split(expected[i], "\n"), strings.Split(actual[i], "\n")); d != "" {
+			fmt.Fprintf(&diffs, "[%d]\n%s", i, d)
+		}
+	}
+	if diffs.Len() > 0 {
+		fmt.Fprintf(&b, "\n--- differing statements (line-by-line, -want +got) ---\n%s", &diffs)
+	}
+	return b.String()
 }

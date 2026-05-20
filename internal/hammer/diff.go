@@ -695,8 +695,12 @@ func (g *Generator) generateDDLForColumns(from, to *Table) DDL {
 			}
 		}
 		if g.columnTypeEqual(fromCol, toCol) && !requireDropAndCreateByDefault(fromCol.DefaultSemantics) && !requireDropAndCreateByDefault(toCol.DefaultSemantics) {
+			notNullChanged := fromCol.NotNull != toCol.NotNull
 			if st, ok := fromCol.Type.(*ast.ScalarSchemaType); ok && st.Name == ast.TimestampTypeName {
-				if fromCol.NotNull != toCol.NotNull || !g.columnDefaultExprEqual(fromCol.DefaultSemantics, toCol.DefaultSemantics) {
+				if notNullChanged || !g.columnDefaultExprEqual(fromCol.DefaultSemantics, toCol.DefaultSemantics) {
+					if notNullChanged {
+						ddl.AppendDDL(g.generateDDLForDropForeignKeysReferencingColumn(to.Name, toCol.Name))
+					}
 					if !fromCol.NotNull && toCol.NotNull {
 						ddl.Append(Update{Table: to.Name.SQL(), Def: toCol})
 					}
@@ -706,6 +710,9 @@ func (g *Generator) generateDDLForColumns(from, to *Table) DDL {
 					ddl.Append(AlterColumn{Table: to.Name.SQL(), Def: toCol, SetOptions: true})
 				}
 			} else {
+				if notNullChanged {
+					ddl.AppendDDL(g.generateDDLForDropForeignKeysReferencingColumn(to.Name, toCol.Name))
+				}
 				if !fromCol.NotNull && toCol.NotNull {
 					ddl.Append(Update{Table: to.Name.SQL(), Def: toCol})
 				}
@@ -723,33 +730,16 @@ func (g *Generator) generateDDLForColumns(from, to *Table) DDL {
 	return ddl
 }
 
+func (g *Generator) generateDDLForDropForeignKeysReferencingColumn(table *ast.Path, column *ast.Ident) DDL {
+	return g.generateDDLForDropNamedConstraintsMatchingPredicate(func(t *Table, constraint *ast.TableConstraint) bool {
+		return foreignKeyReferencesColumn(t, table, column, constraint)
+	})
+}
+
 func (g *Generator) generateDDLForDropColumn(table *ast.Path, column *ast.Ident) DDL {
 	ddl := DDL{}
 
-	ddl.AppendDDL(g.generateDDLForDropNamedConstraintsMatchingPredicate(func(t *Table, constraint *ast.TableConstraint) bool {
-		fk, ok := constraint.Constraint.(*ast.ForeignKey)
-		if !ok {
-			return false
-		}
-
-		if identsToComparable(t.Name.Idents...) == identsToComparable(table.Idents...) {
-			for _, c := range fk.Columns {
-				if identsToComparable(column) == identsToComparable(c) {
-					return true
-				}
-			}
-		}
-
-		if identsToComparable(fk.ReferenceTable.Idents...) == identsToComparable(table.Idents...) {
-			for _, refColumn := range fk.ReferenceColumns {
-				if identsToComparable(column) == identsToComparable(refColumn) {
-					return true
-				}
-			}
-		}
-
-		return false
-	}))
+	ddl.AppendDDL(g.generateDDLForDropForeignKeysReferencingColumn(table, column))
 
 	grants := g.from.grantsFromPath(table)
 	for _, grant := range grants {
@@ -1376,6 +1366,29 @@ func (g *Generator) findSearchIndexByColumn(indexes []*ast.CreateSearchIndex, co
 		}
 	}
 	return result
+}
+
+func foreignKeyReferencesColumn(constraintHost *Table, tableName *ast.Path, column *ast.Ident, constraint *ast.TableConstraint) bool {
+	fk, ok := constraint.Constraint.(*ast.ForeignKey)
+	if !ok {
+		return false
+	}
+	columnKey := identsToComparable(column)
+	if identsToComparable(constraintHost.Name.Idents...) == identsToComparable(tableName.Idents...) {
+		for _, c := range fk.Columns {
+			if identsToComparable(c) == columnKey {
+				return true
+			}
+		}
+	}
+	if identsToComparable(fk.ReferenceTable.Idents...) == identsToComparable(tableName.Idents...) {
+		for _, refColumn := range fk.ReferenceColumns {
+			if identsToComparable(refColumn) == columnKey {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func searchIndexReferencesColumn(i *ast.CreateSearchIndex, column string) bool {

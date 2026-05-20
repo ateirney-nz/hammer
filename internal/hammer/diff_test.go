@@ -374,6 +374,161 @@ CREATE TABLE t1 (
 			},
 		},
 		{
+			name: "drop NOT NULL on FK column drops and re-adds the constraint",
+			from: `
+CREATE TABLE Bars (
+  ID INT64 NOT NULL,
+) PRIMARY KEY(ID);
+CREATE TABLE Foos (
+  FooID INT64 NOT NULL,
+  BarID INT64 NOT NULL,
+  CONSTRAINT FK_FoosBar FOREIGN KEY (BarID) REFERENCES Bars (ID),
+) PRIMARY KEY(FooID);
+`,
+			to: `
+CREATE TABLE Bars (
+  ID INT64 NOT NULL,
+) PRIMARY KEY(ID);
+CREATE TABLE Foos (
+  FooID INT64 NOT NULL,
+  BarID INT64,
+  CONSTRAINT FK_FoosBar FOREIGN KEY (BarID) REFERENCES Bars (ID),
+) PRIMARY KEY(FooID);
+`,
+			expected: []string{
+				`ALTER TABLE Foos DROP CONSTRAINT FK_FoosBar`,
+				`ALTER TABLE Foos ALTER COLUMN BarID INT64`,
+				`ALTER TABLE Foos ADD CONSTRAINT FK_FoosBar FOREIGN KEY (BarID) REFERENCES Bars (ID)`,
+			},
+		},
+		{
+			name: "add NOT NULL on FK column drops and re-adds the constraint",
+			from: `
+CREATE TABLE Bars (
+  ID INT64 NOT NULL,
+) PRIMARY KEY(ID);
+CREATE TABLE Foos (
+  FooID INT64 NOT NULL,
+  BarID INT64,
+  CONSTRAINT FK_FoosBar FOREIGN KEY (BarID) REFERENCES Bars (ID),
+) PRIMARY KEY(FooID);
+`,
+			to: `
+CREATE TABLE Bars (
+  ID INT64 NOT NULL,
+) PRIMARY KEY(ID);
+CREATE TABLE Foos (
+  FooID INT64 NOT NULL,
+  BarID INT64 NOT NULL,
+  CONSTRAINT FK_FoosBar FOREIGN KEY (BarID) REFERENCES Bars (ID),
+) PRIMARY KEY(FooID);
+`,
+			expected: []string{
+				`ALTER TABLE Foos DROP CONSTRAINT FK_FoosBar`,
+				`UPDATE Foos SET BarID = 0 WHERE BarID IS NULL`,
+				`ALTER TABLE Foos ALTER COLUMN BarID INT64 NOT NULL`,
+				`ALTER TABLE Foos ADD CONSTRAINT FK_FoosBar FOREIGN KEY (BarID) REFERENCES Bars (ID)`,
+			},
+		},
+		{
+			name: "drop NOT NULL on a column referenced by FK from another table",
+			from: `
+CREATE TABLE Foos (
+  FooID INT64 NOT NULL,
+  RefKey INT64 NOT NULL,
+) PRIMARY KEY(FooID);
+CREATE TABLE Bazs (
+  BazID INT64 NOT NULL,
+  RefKey INT64 NOT NULL,
+  CONSTRAINT FK_BazsFoos FOREIGN KEY (RefKey) REFERENCES Foos (RefKey),
+) PRIMARY KEY(BazID);
+`,
+			to: `
+CREATE TABLE Foos (
+  FooID INT64 NOT NULL,
+  RefKey INT64,
+) PRIMARY KEY(FooID);
+CREATE TABLE Bazs (
+  BazID INT64 NOT NULL,
+  RefKey INT64 NOT NULL,
+  CONSTRAINT FK_BazsFoos FOREIGN KEY (RefKey) REFERENCES Foos (RefKey),
+) PRIMARY KEY(BazID);
+`,
+			expected: []string{
+				`ALTER TABLE Bazs DROP CONSTRAINT FK_BazsFoos`,
+				`ALTER TABLE Foos ALTER COLUMN RefKey INT64`,
+				`ALTER TABLE Bazs ADD CONSTRAINT FK_BazsFoos FOREIGN KEY (RefKey) REFERENCES Foos (RefKey)`,
+			},
+		},
+		{
+			name: "FK column unchanged is no-op",
+			from: `
+CREATE TABLE Bars (
+  ID INT64 NOT NULL,
+) PRIMARY KEY(ID);
+CREATE TABLE Foos (
+  FooID INT64 NOT NULL,
+  BarID INT64 NOT NULL,
+  CONSTRAINT FK_FoosBar FOREIGN KEY (BarID) REFERENCES Bars (ID),
+) PRIMARY KEY(FooID);
+`,
+			to: `
+CREATE TABLE Bars (
+  ID INT64 NOT NULL,
+) PRIMARY KEY(ID);
+CREATE TABLE Foos (
+  FooID INT64 NOT NULL,
+  BarID INT64 NOT NULL,
+  CONSTRAINT FK_FoosBar FOREIGN KEY (BarID) REFERENCES Bars (ID),
+) PRIMARY KEY(FooID);
+`,
+			expected: []string{},
+		},
+		{
+			name: "DEFAULT change on FK column does not drop the constraint",
+			from: `
+CREATE TABLE Bars (
+  ID INT64 NOT NULL,
+) PRIMARY KEY(ID);
+CREATE TABLE Foos (
+  FooID INT64 NOT NULL,
+  BarID INT64 NOT NULL DEFAULT (1),
+  CONSTRAINT FK_FoosBar FOREIGN KEY (BarID) REFERENCES Bars (ID),
+) PRIMARY KEY(FooID);
+`,
+			to: `
+CREATE TABLE Bars (
+  ID INT64 NOT NULL,
+) PRIMARY KEY(ID);
+CREATE TABLE Foos (
+  FooID INT64 NOT NULL,
+  BarID INT64 NOT NULL DEFAULT (2),
+  CONSTRAINT FK_FoosBar FOREIGN KEY (BarID) REFERENCES Bars (ID),
+) PRIMARY KEY(FooID);
+`,
+			expected: []string{
+				`ALTER TABLE Foos ALTER COLUMN BarID INT64 NOT NULL DEFAULT (2)`,
+			},
+		},
+		{
+			name: "NOT NULL change on a column without FK does not emit FK ops",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{
+				`ALTER TABLE t1 ALTER COLUMN t1_2 INT64`,
+			},
+		},
+		{
 			name: "change column (timestamp)",
 			from: `
 CREATE TABLE t1 (

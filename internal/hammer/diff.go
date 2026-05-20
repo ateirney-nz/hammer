@@ -1027,7 +1027,9 @@ func (g *Generator) interleaveEqual(x, y *Table) bool {
 }
 
 func (g *Generator) primaryKeyEqual(x, y *Table) bool {
-	if !cmp.Equal(x.PrimaryKeys, y.PrimaryKeys,
+	xPrimaryKeys := primaryKeysForComparison(x)
+	yPrimaryKeys := primaryKeysForComparison(y)
+	if !cmp.Equal(xPrimaryKeys, yPrimaryKeys,
 		cmpopts.IgnoreTypes(token.Pos(0)),
 		cmp.Comparer(func(a, b *ast.IndexKey) bool {
 			aVal := *a
@@ -1042,7 +1044,7 @@ func (g *Generator) primaryKeyEqual(x, y *Table) bool {
 		})) {
 		return false
 	}
-	for _, pk := range y.PrimaryKeys {
+	for _, pk := range yPrimaryKeys {
 		xCol, exists := g.findColumnByName(x.Columns, identsToComparable(pk.Name))
 		if !exists {
 			return false
@@ -1058,9 +1060,27 @@ func (g *Generator) primaryKeyEqual(x, y *Table) bool {
 	return true
 }
 
+// primaryKeysForComparison folds the inline `id INT64 PRIMARY KEY` column-def
+// form into the table-level `PRIMARY KEY (id)` form that Spanner's GetDdl
+// always returns, so the two surface forms compare as equivalent.
+func primaryKeysForComparison(table *Table) []*ast.IndexKey {
+	if len(table.PrimaryKeys) > 0 {
+		return table.PrimaryKeys
+	}
+	var keys []*ast.IndexKey
+	for _, col := range table.Columns {
+		if !col.PrimaryKey {
+			continue
+		}
+		keys = append(keys, &ast.IndexKey{Name: col.Name})
+	}
+	return keys
+}
+
 func (g *Generator) columnDefEqual(x, y *ast.ColumnDef) bool {
 	return cmp.Equal(x, y,
 		cmpopts.IgnoreTypes(token.Pos(0)),
+		cmpopts.IgnoreFields(ast.ColumnDef{}, "PrimaryKey"),
 		cmp.Comparer(func(x, y *ast.Ident) bool {
 			return strings.EqualFold(x.Name, y.Name)
 		}),

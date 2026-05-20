@@ -267,6 +267,7 @@ func (g *Generator) GenerateDDL() DDL {
 	ddl.AppendDDL(g.generateDDLForAlterDatabaseOptions())
 
 	// for alter table
+	var constraintTargets []*Table
 	for _, toTable := range g.to.tables {
 		fromTable, exists := g.findTableByName(g.from.tables, identsToComparable(toTable.Name.Idents...))
 
@@ -296,9 +297,13 @@ func (g *Generator) GenerateDDL() DDL {
 		ddl.AppendDDL(g.generateDDLForColumns(fromTable, toTable))
 		ddl.AppendDDL(g.generateDDLForCreateIndex(fromTable, toTable))
 		ddl.AppendDDL(g.generateDDLForAlterIndex(fromTable, toTable))
-		ddl.AppendDDL(g.generateDDLForConstraints(fromTable, toTable))
+		constraintTargets = append(constraintTargets, toTable)
 		ddl.AppendDDL(g.generateDDLForRowDeletionPolicy(fromTable, toTable))
 		ddl.AppendDDL(g.generateDDLForCreateChangeStream(g.from, toTable))
+	}
+	for _, toTable := range constraintTargets {
+		fromTable, _ := g.findTableByName(g.from.tables, identsToComparable(toTable.Name.Idents...))
+		ddl.AppendDDL(g.generateDDLForConstraints(fromTable, toTable))
 	}
 	// for alter change stream
 	for _, toChangeStream := range g.to.changeStreams {

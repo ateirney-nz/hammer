@@ -1971,6 +1971,31 @@ CREATE INDEX IF NOT EXISTS idx_t1 ON t1(t1_2);
 `,
 			expected: []string{},
 		},
+		{
+			name: "index follows STORING column drop+create",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64 NOT NULL,
+  t1_3 INT64,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1 ON t1(t1_2) STORING (t1_3);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64 NOT NULL,
+  t1_3 STRING(MAX),
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1 ON t1(t1_2) STORING (t1_3);
+`,
+			expected: []string{
+				"DROP INDEX idx_t1",
+				"ALTER TABLE t1 DROP COLUMN t1_3",
+				"ALTER TABLE t1 ADD COLUMN t1_3 STRING(MAX)",
+				"CREATE INDEX idx_t1 ON t1(t1_2) STORING (t1_3)",
+			},
+		},
 		// === SEARCH INDEX ===
 		{
 			name: "add search index",
@@ -2155,6 +2180,89 @@ CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1 DESC;
 			expected: []string{
 				"DROP SEARCH INDEX idx_t1",
 				"CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1 DESC",
+			},
+		},
+		{
+			name: "search index follows STORING column drop+create",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX) NOT NULL,
+  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
+  t1_4 INT64,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1 ON t1(t1_3) STORING (t1_4);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX) NOT NULL,
+  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
+  t1_4 STRING(MAX),
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1 ON t1(t1_3) STORING (t1_4);
+`,
+			expected: []string{
+				"DROP SEARCH INDEX idx_t1",
+				"ALTER TABLE t1 DROP COLUMN t1_4",
+				"ALTER TABLE t1 ADD COLUMN t1_4 STRING(MAX)",
+				"CREATE SEARCH INDEX idx_t1 ON t1(t1_3) STORING (t1_4)",
+			},
+		},
+		{
+			name: "search index follows PARTITION BY column drop+create",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX) NOT NULL,
+  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
+  t1_4 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1 ON t1(t1_3) PARTITION BY t1_4;
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX) NOT NULL,
+  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
+  t1_4 STRING(MAX) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1 ON t1(t1_3) PARTITION BY t1_4;
+`,
+			expected: []string{
+				"DROP SEARCH INDEX idx_t1",
+				"ALTER TABLE t1 DROP COLUMN t1_4",
+				`ALTER TABLE t1 ADD COLUMN t1_4 STRING(MAX) NOT NULL DEFAULT ("")`,
+				"ALTER TABLE t1 ALTER COLUMN t1_4 DROP DEFAULT",
+				"CREATE SEARCH INDEX idx_t1 ON t1(t1_3) PARTITION BY t1_4",
+			},
+		},
+		{
+			name: "search index follows ORDER BY column drop+create",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX) NOT NULL,
+  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
+  t1_4 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_4 DESC;
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX) NOT NULL,
+  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
+  t1_4 STRING(MAX) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_4 DESC;
+`,
+			expected: []string{
+				"DROP SEARCH INDEX idx_t1",
+				"ALTER TABLE t1 DROP COLUMN t1_4",
+				`ALTER TABLE t1 ADD COLUMN t1_4 STRING(MAX) NOT NULL DEFAULT ("")`,
+				"ALTER TABLE t1 ALTER COLUMN t1_4 DROP DEFAULT",
+				"CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_4 DESC",
 			},
 		},
 		// === VIEW ===

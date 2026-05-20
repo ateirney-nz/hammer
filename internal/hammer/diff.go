@@ -994,7 +994,23 @@ func (g *Generator) isDroppedGrant(grant *Grant) bool {
 }
 
 func (g *Generator) interleaveEqual(x, y *Table) bool {
-	return cmp.Equal(x.Cluster, y.Cluster, cmpopts.IgnoreTypes(token.Pos(0)))
+	return cmp.Equal(x.Cluster, y.Cluster,
+		cmpopts.IgnoreTypes(token.Pos(0)),
+		cmp.Comparer(func(a, b *ast.Cluster) bool {
+			if a == nil || b == nil {
+				return a == b
+			}
+			aVal := *a
+			bVal := *b
+			if aVal.OnDelete == "" {
+				aVal.OnDelete = ast.OnDeleteNoAction
+			}
+			if bVal.OnDelete == "" {
+				bVal.OnDelete = ast.OnDeleteNoAction
+			}
+			return cmp.Equal(aVal, bVal, cmpopts.IgnoreTypes(token.Pos(0)))
+		}),
+	)
 }
 
 func (g *Generator) primaryKeyEqual(x, y *Table) bool {
@@ -1062,6 +1078,12 @@ func (g *Generator) constraintEqual(x, y *ast.TableConstraint) bool {
 			if bVal.OnDelete == "" {
 				bVal.OnDelete = ast.OnDeleteNoAction
 			}
+			if aVal.Enforcement == "" {
+				aVal.Enforcement = ast.Enforced
+			}
+			if bVal.Enforcement == "" {
+				bVal.Enforcement = ast.Enforced
+			}
 			return cmp.Equal(aVal, bVal, cmpopts.IgnoreTypes(token.Pos(0)))
 		}),
 	)
@@ -1071,6 +1093,7 @@ func (g *Generator) indexEqualIgnoringStoring(x, y *ast.CreateIndex) bool {
 	return cmp.Equal(x, y,
 		cmpopts.IgnoreTypes(token.Pos(0)),
 		cmpopts.IgnoreTypes(&ast.Storing{}),
+		cmpopts.IgnoreFields(ast.CreateIndex{}, "IfNotExists"),
 		cmp.Comparer(func(a, b *ast.IndexKey) bool {
 			aVal := *a
 			bVal := *b
@@ -1086,11 +1109,32 @@ func (g *Generator) indexEqualIgnoringStoring(x, y *ast.CreateIndex) bool {
 }
 
 func (g *Generator) searchIndexEqual(x, y ast.CreateSearchIndex) bool {
-	return cmp.Equal(x, y, cmpopts.IgnoreTypes(token.Pos(0)))
+	return cmp.Equal(x, y,
+		cmpopts.IgnoreTypes(token.Pos(0)),
+		cmp.Comparer(func(a, b *ast.OrderByItem) bool {
+			aVal := *a
+			bVal := *b
+			if aVal.Dir == "" {
+				aVal.Dir = ast.DirectionAsc
+			}
+			if bVal.Dir == "" {
+				bVal.Dir = ast.DirectionAsc
+			}
+			return cmp.Equal(aVal, bVal, cmpopts.IgnoreTypes(token.Pos(0)))
+		}),
+	)
 }
 
 func (g *Generator) changeStreamForEqual(x, y ast.ChangeStreamFor) bool {
-	return cmp.Equal(x, y, cmpopts.IgnoreTypes(token.Pos(0)))
+	return cmp.Equal(x, y,
+		cmpopts.IgnoreTypes(token.Pos(0)),
+		cmpopts.SortSlices(func(a, b *ast.ChangeStreamForTable) bool {
+			return identsToComparable(a.TableName) < identsToComparable(b.TableName)
+		}),
+		cmpopts.SortSlices(func(a, b *ast.Ident) bool {
+			return identsToComparable(a) < identsToComparable(b)
+		}),
+	)
 }
 
 func (g *Generator) columnDefaultExprEqual(x, y ast.ColumnDefaultSemantics) bool {
@@ -1102,7 +1146,18 @@ func (g *Generator) createRowDeletionPolicyEqual(x, y *ast.CreateRowDeletionPoli
 }
 
 func (g *Generator) optionsEqual(x, y *ast.Options) bool {
-	return cmp.Equal(x, y, cmpopts.IgnoreTypes(token.Pos(0)))
+	return cmp.Equal(g.optionsToMap(x), g.optionsToMap(y))
+}
+
+func (g *Generator) optionsToMap(options *ast.Options) map[string]string {
+	if options == nil {
+		return nil
+	}
+	m := make(map[string]string, len(options.Records))
+	for _, o := range options.Records {
+		m[o.Name.Name] = o.Value.SQL()
+	}
+	return m
 }
 
 func (g *Generator) optionsValueEqual(x, y *ast.Options, name string) bool {

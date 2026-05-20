@@ -41,10 +41,15 @@ var (
 			if err != nil {
 				return err
 			}
+			ignoreProtoBundles, err := cmd.Flags().GetBool("ignore-proto-bundles")
+			if err != nil {
+				return err
+			}
 			ddlOption := &hammer.DDLOption{
 				IgnoreAlterDatabase: ignoreAlterDatabase,
 				IgnoreChangeStreams: ignoreChangeStreams,
 				IgnoreModels:        ignoreModels,
+				IgnoreProtoBundles:  ignoreProtoBundles,
 			}
 
 			source, err := hammer.NewSource(ctx, sourceURI)
@@ -68,6 +73,7 @@ func init() {
 	exportCmd.Flags().Bool("ignore-alter-database", false, "ignore alter database statements")
 	exportCmd.Flags().Bool("ignore-change-streams", false, "ignore change streams statements")
 	exportCmd.Flags().Bool("ignore-models", false, "ignore model statements")
+	exportCmd.Flags().Bool("ignore-proto-bundles", false, "ignore proto bundle statements")
 
 	rootCmd.AddCommand(exportCmd)
 }

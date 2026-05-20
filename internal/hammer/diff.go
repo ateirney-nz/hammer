@@ -91,8 +91,6 @@ func NewDatabase(ddl DDL) (*Database, error) {
 			roles = append(roles, &Role{CreateRole: stmt})
 		case *ast.Grant:
 			grants = append(grants, &Grant{Grant: stmt})
-		case *ast.CreateProtoBundle:
-			// CREATE PROTO BUNDLE is not supported, ignore it.
 		default:
 			return nil, fmt.Errorf("unexpected ddl statement: %v", stmt.SQL())
 		}

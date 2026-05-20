@@ -461,6 +461,36 @@ CREATE TABLE Bazs (
 			},
 		},
 		{
+			name: "drop NOT NULL when FK on another table is declared before the column owner",
+			from: `
+CREATE TABLE Foos (
+  FooID INT64 NOT NULL,
+  RefKey INT64 NOT NULL,
+) PRIMARY KEY(FooID);
+CREATE TABLE Bazs (
+  BazID INT64 NOT NULL,
+  RefKey INT64 NOT NULL,
+  CONSTRAINT FK_BazsFoos FOREIGN KEY (RefKey) REFERENCES Foos (RefKey),
+) PRIMARY KEY(BazID);
+`,
+			to: `
+CREATE TABLE Bazs (
+  BazID INT64 NOT NULL,
+  RefKey INT64 NOT NULL,
+  CONSTRAINT FK_BazsFoos FOREIGN KEY (RefKey) REFERENCES Foos (RefKey),
+) PRIMARY KEY(BazID);
+CREATE TABLE Foos (
+  FooID INT64 NOT NULL,
+  RefKey INT64,
+) PRIMARY KEY(FooID);
+`,
+			expected: []string{
+				`ALTER TABLE Bazs DROP CONSTRAINT FK_BazsFoos`,
+				`ALTER TABLE Foos ALTER COLUMN RefKey INT64`,
+				`ALTER TABLE Bazs ADD CONSTRAINT FK_BazsFoos FOREIGN KEY (RefKey) REFERENCES Foos (RefKey)`,
+			},
+		},
+		{
 			name: "FK column unchanged is no-op",
 			from: `
 CREATE TABLE Bars (

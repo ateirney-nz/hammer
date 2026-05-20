@@ -74,6 +74,21 @@ spanner://projects/{projectId}/instances/{instanceId}/databases/{databaseName}?c
 | `databaseName` | true     | The name of the Spanner database                                                               |
 | `credentials`  | false    | The path to the keyfile. If not present, client will use your default application credentials. |
 
+### Using with the Spanner Emulator
+
+hammer transparently honours the `SPANNER_EMULATOR_HOST` environment variable that the Cloud Spanner Go client SDK uses, so it can target the [Spanner emulator](https://cloud.google.com/spanner/docs/emulator) without any code or DSN changes.
+
+1. Start the emulator (`gcloud emulators spanner start` or the official Docker image).
+2. Create an instance and database against it once (see the [emulator documentation](https://cloud.google.com/spanner/docs/emulator)).
+3. Export the env var and invoke hammer normally:
+
+``` shell
+$ export SPANNER_EMULATOR_HOST=localhost:9010
+$ hammer apply spanner://projects/test-project/instances/test-instance/databases/test-database schema.sql
+```
+
+The `credentials=` query parameter is not needed when talking to the emulator.
+
 ### Flags
 
 apply, create, diff and export can accept the flags defined below

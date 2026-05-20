@@ -18,6 +18,7 @@ func TestDiff(t *testing.T) {
 		from                string
 		to                  string
 		ignoreAlterDatabase bool
+		ignoreProtoBundles  bool
 		expected            []string
 	}{
 		// === TABLE ===
@@ -3552,7 +3553,8 @@ CREATE TABLE t1 (
   t1_1 INT64 NOT NULL,
 ) PRIMARY KEY(t1_1);
 `,
-			expected: []string{},
+			ignoreProtoBundles: true,
+			expected:           []string{},
 		},
 		{
 			name: "ignore create proto bundle in to",
@@ -3567,7 +3569,8 @@ CREATE TABLE t1 (
 ) PRIMARY KEY(t1_1);
 CREATE PROTO BUNDLE (foo.bar);
 `,
-			expected: []string{},
+			ignoreProtoBundles: true,
+			expected:           []string{},
 		},
 		{
 			name: "ignore create proto bundle in both",
@@ -3583,7 +3586,8 @@ CREATE TABLE t1 (
 ) PRIMARY KEY(t1_1);
 CREATE PROTO BUNDLE (foo.bar, baz.qux);
 `,
-			expected: []string{},
+			ignoreProtoBundles: true,
+			expected:           []string{},
 		},
 		// === IDENTIFIERS / NAMING ===
 		{
@@ -3643,11 +3647,11 @@ CREATE TABLE T1 (
 		t.Run(v.name, func(t *testing.T) {
 			ctx := context.Background()
 
-			d1, err := StringSource(v.from).DDL(ctx, &hammer.DDLOption{IgnoreAlterDatabase: v.ignoreAlterDatabase})
+			d1, err := StringSource(v.from).DDL(ctx, &hammer.DDLOption{IgnoreAlterDatabase: v.ignoreAlterDatabase, IgnoreProtoBundles: v.ignoreProtoBundles})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			d2, err := StringSource(v.to).DDL(ctx, &hammer.DDLOption{IgnoreAlterDatabase: v.ignoreAlterDatabase})
+			d2, err := StringSource(v.to).DDL(ctx, &hammer.DDLOption{IgnoreAlterDatabase: v.ignoreAlterDatabase, IgnoreProtoBundles: v.ignoreProtoBundles})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

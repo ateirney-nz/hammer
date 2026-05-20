@@ -835,7 +835,7 @@ func (g *Generator) generateDDLForDropIndex(from, to *Table) DDL {
 	for _, toIndex := range to.searchIndexes {
 		fromIndex, exists := g.findSearchIndexByName(from.searchIndexes, identsToComparable(toIndex.Name))
 
-		if exists && !g.searchIndexEqual(*fromIndex, *toIndex) {
+		if exists && !g.searchIndexEqual(fromIndex, toIndex) {
 			ddl.Append(&ast.DropSearchIndex{Name: fromIndex.Name})
 			g.dropedIndex = append(g.dropedIndex, identsToComparable(fromIndex.Name))
 		}
@@ -864,7 +864,7 @@ func (g *Generator) generateDDLForCreateIndex(from, to *Table) DDL {
 	for _, toIndex := range to.searchIndexes {
 		fromIndex, exists := g.findSearchIndexByName(from.searchIndexes, identsToComparable(toIndex.Name))
 
-		if !exists || !g.searchIndexEqual(*fromIndex, *toIndex) {
+		if !exists || !g.searchIndexEqual(fromIndex, toIndex) {
 			ddl.Append(toIndex)
 		}
 	}
@@ -1141,7 +1141,7 @@ func (g *Generator) indexEqualIgnoringStoring(x, y *ast.CreateIndex) bool {
 	)
 }
 
-func (g *Generator) searchIndexEqual(x, y ast.CreateSearchIndex) bool {
+func (g *Generator) searchIndexEqual(x, y *ast.CreateSearchIndex) bool {
 	return cmp.Equal(x, y,
 		cmpopts.IgnoreTypes(token.Pos(0)),
 		cmp.Comparer(func(a, b *ast.OrderByItem) bool {
@@ -1336,14 +1336,27 @@ func (g *Generator) findIndexByName(indexes []*ast.CreateIndex, name string) (in
 func (g *Generator) findIndexByColumn(indexes []*ast.CreateIndex, column string) []*ast.CreateIndex {
 	result := []*ast.CreateIndex{}
 	for _, i := range indexes {
-		for _, c := range i.Keys {
-			if identsToComparable(c.Name) == column {
-				result = append(result, i)
-				break
-			}
+		if indexReferencesColumn(i, column) {
+			result = append(result, i)
 		}
 	}
 	return result
+}
+
+func indexReferencesColumn(i *ast.CreateIndex, column string) bool {
+	for _, k := range i.Keys {
+		if identsToComparable(k.Name) == column {
+			return true
+		}
+	}
+	if i.Storing != nil {
+		for _, c := range i.Storing.Columns {
+			if identsToComparable(c) == column {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (g *Generator) findSearchIndexByName(indexes []*ast.CreateSearchIndex, name string) (index *ast.CreateSearchIndex, exists bool) {
@@ -1358,14 +1371,39 @@ func (g *Generator) findSearchIndexByName(indexes []*ast.CreateSearchIndex, name
 func (g *Generator) findSearchIndexByColumn(indexes []*ast.CreateSearchIndex, column string) []*ast.CreateSearchIndex {
 	result := []*ast.CreateSearchIndex{}
 	for _, i := range indexes {
-		for _, c := range i.TokenListPart {
-			if c.Name == column {
-				result = append(result, i)
-				break
-			}
+		if searchIndexReferencesColumn(i, column) {
+			result = append(result, i)
 		}
 	}
 	return result
+}
+
+func searchIndexReferencesColumn(i *ast.CreateSearchIndex, column string) bool {
+	for _, c := range i.TokenListPart {
+		if identsToComparable(c) == column {
+			return true
+		}
+	}
+	if i.Storing != nil {
+		for _, c := range i.Storing.Columns {
+			if identsToComparable(c) == column {
+				return true
+			}
+		}
+	}
+	for _, c := range i.PartitionColumns {
+		if identsToComparable(c) == column {
+			return true
+		}
+	}
+	if i.OrderBy != nil {
+		for _, item := range i.OrderBy.Items {
+			if id, ok := item.Expr.(*ast.Ident); ok && identsToComparable(id) == column {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (g *Generator) generateDDLForDropNamedConstraintsMatchingPredicate(predicate func(table *Table, constraint *ast.TableConstraint) bool) DDL {

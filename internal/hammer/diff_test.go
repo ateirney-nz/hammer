@@ -591,6 +591,45 @@ CREATE TABLE t1 (
 			},
 		},
 		{
+			name: "generated column with JSON_QUERY identity is no-op",
+			from: `
+CREATE TABLE t1 (
+  id STRING(40) NOT NULL,
+  data JSON,
+  has_value BOOL AS (IF(JSON_QUERY(data, '$.value') IS NOT NULL, true, false)) STORED,
+) PRIMARY KEY(id);
+`,
+			to: `
+CREATE TABLE t1 (
+  id STRING(40) NOT NULL,
+  data JSON,
+  has_value BOOL AS (IF(JSON_QUERY(data, '$.value') IS NOT NULL, true, false)) STORED,
+) PRIMARY KEY(id);
+`,
+			expected: []string{},
+		},
+		{
+			name: "generated column with JSON_QUERY path change is detected",
+			from: `
+CREATE TABLE t1 (
+  id STRING(40) NOT NULL,
+  data JSON,
+  has_value BOOL AS (IF(JSON_QUERY(data, '$.value') IS NOT NULL, true, false)) STORED,
+) PRIMARY KEY(id);
+`,
+			to: `
+CREATE TABLE t1 (
+  id STRING(40) NOT NULL,
+  data JSON,
+  has_value BOOL AS (IF(JSON_QUERY(data, '$.other') IS NOT NULL, true, false)) STORED,
+) PRIMARY KEY(id);
+`,
+			expected: []string{
+				`ALTER TABLE t1 DROP COLUMN has_value`,
+				`ALTER TABLE t1 ADD COLUMN has_value BOOL AS (IF(JSON_QUERY(data, "$.other") IS NOT NULL, TRUE, FALSE)) STORED`,
+			},
+		},
+		{
 			name: "change column (interleaved)",
 			from: `
 CREATE TABLE t1 (

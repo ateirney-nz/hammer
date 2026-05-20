@@ -20,6 +20,7 @@ func TestDiff(t *testing.T) {
 		ignoreAlterDatabase bool
 		expected            []string
 	}{
+		// === TABLE ===
 		{
 			name: "drop table",
 			from: `
@@ -57,9 +58,57 @@ CREATE TABLE t2 (
 ) PRIMARY KEY(t2_1);
 `,
 			expected: []string{
-				`CREATE TABLE t2 (
+				`
+CREATE TABLE t2 (
   t2_1 INT64 NOT NULL
 ) PRIMARY KEY (t2_1)`,
+			},
+		},
+		{
+			name: "create table with composite primary key mixed direction",
+			from: `
+CREATE TABLE other (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);`,
+			to: `
+CREATE TABLE other (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+
+CREATE TABLE t1 (
+  a INT64 NOT NULL,
+  b INT64 NOT NULL,
+) PRIMARY KEY(a, b DESC);
+`,
+			expected: []string{
+				`
+CREATE TABLE t1 (
+  a INT64 NOT NULL,
+  b INT64 NOT NULL
+) PRIMARY KEY (a, b DESC)`,
+			},
+		},
+		{
+			name: "change PK column direction triggers table recreation",
+			from: `
+CREATE TABLE t1 (
+  a INT64 NOT NULL,
+  b INT64 NOT NULL,
+) PRIMARY KEY(a, b);
+`,
+			to: `
+CREATE TABLE t1 (
+  a INT64 NOT NULL,
+  b INT64 NOT NULL,
+) PRIMARY KEY(a, b DESC);
+`,
+			expected: []string{
+				"DROP TABLE t1",
+				`
+CREATE TABLE t1 (
+  a INT64 NOT NULL,
+  b INT64 NOT NULL
+) PRIMARY KEY (a, b DESC)`,
 			},
 		},
 		{
@@ -399,6 +448,24 @@ CREATE TABLE t1 (
 			},
 		},
 		{
+			name: "add column FLOAT32 not null",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 FLOAT32 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{
+				`ALTER TABLE t1 ADD COLUMN t1_2 FLOAT32 NOT NULL DEFAULT (0)`,
+				`ALTER TABLE t1 ALTER COLUMN t1_2 DROP DEFAULT`,
+			},
+		},
+		{
 			name: "add hidden column",
 			from: `
 CREATE TABLE t1 (
@@ -523,290 +590,6 @@ CREATE TABLE t1 (
 			},
 		},
 		{
-			name: "add index",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36) NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2);
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36) NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2);
-CREATE INDEX idx_t1_2 ON t1(t1_3);
-`,
-			expected: []string{
-				`CREATE INDEX idx_t1_2 ON t1(t1_3)`,
-			},
-		},
-		{
-			name: "drop index (different index positions)",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36) NOT NULL,
-) PRIMARY KEY(t1_1);
-
-CREATE INDEX idx_t1_1 ON t1(t1_2);
-
-CREATE INDEX idx_t1_2 ON t1(t1_3);
-
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36) NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_2 ON t1(t1_3);
-`,
-			expected: []string{
-				`DROP INDEX idx_t1_1`,
-			},
-		},
-		{
-			name: "alter index add stored column",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36) NOT NULL,
-  t1_4 STRING(36) NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2);
-CREATE INDEX idx_t1_2 ON t1(t1_2) STORING (t1_3);
-CREATE INDEX idx_t1_3 ON t1(t1_2);
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36) NOT NULL,
-  t1_4 STRING(36) NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2) STORING (t1_3);
-CREATE INDEX idx_t1_2 ON t1(t1_2) STORING (t1_3, t1_4);
-CREATE INDEX idx_t1_3 ON t1(t1_2) STORING (t1_3, t1_4);
-`,
-			expected: []string{
-				`ALTER INDEX idx_t1_1 ADD STORED COLUMN t1_3`,
-				`ALTER INDEX idx_t1_2 ADD STORED COLUMN t1_4`,
-				`ALTER INDEX idx_t1_3 ADD STORED COLUMN t1_3`,
-				`ALTER INDEX idx_t1_3 ADD STORED COLUMN t1_4`,
-			},
-		},
-		{
-			name: "alter index drop stored column",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36) NOT NULL,
-  t1_4 STRING(36) NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2) STORING (t1_3);
-CREATE INDEX idx_t1_2 ON t1(t1_2) STORING (t1_3, t1_4);
-CREATE INDEX idx_t1_3 ON t1(t1_2) STORING (t1_3, t1_4);
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36) NOT NULL,
-  t1_4 STRING(36) NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2);
-CREATE INDEX idx_t1_2 ON t1(t1_2) STORING (t1_3);
-CREATE INDEX idx_t1_3 ON t1(t1_2);
-`,
-			expected: []string{
-				`ALTER INDEX idx_t1_1 DROP STORED COLUMN t1_3`,
-				`ALTER INDEX idx_t1_2 DROP STORED COLUMN t1_4`,
-				`ALTER INDEX idx_t1_3 DROP STORED COLUMN t1_3`,
-				`ALTER INDEX idx_t1_3 DROP STORED COLUMN t1_4`,
-			},
-		},
-		{
-			name: "alter index change stored column",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36) NOT NULL,
-  t1_4 STRING(36) NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2) STORING (t1_3);
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36) NOT NULL,
-  t1_4 STRING(36) NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2) STORING (t1_4);
-`,
-			expected: []string{
-				`ALTER INDEX idx_t1_1 ADD STORED COLUMN t1_4`,
-				`ALTER INDEX idx_t1_1 DROP STORED COLUMN t1_3`,
-			},
-		},
-		{
-			name: "change index columns",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36) NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2) STORING (t1_3);
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36) NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_3) STORING (t1_2);
-`,
-			expected: []string{
-				`DROP INDEX idx_t1_1`,
-				`CREATE INDEX idx_t1_1 ON t1(t1_3) STORING (t1_2)`,
-			},
-		},
-		{
-			name: "change indexed column",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 STRING(36),
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2);
-CREATE INDEX idx_t1_2 ON t1(t1_3);
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(36) NOT NULL,
-  t1_3 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2);
-CREATE INDEX idx_t1_2 ON t1(t1_3);
-`,
-			expected: []string{
-				`DROP INDEX idx_t1_2`,
-				`ALTER TABLE t1 DROP COLUMN t1_3`,
-				`ALTER TABLE t1 ADD COLUMN t1_3 INT64 NOT NULL DEFAULT (0)`,
-				`ALTER TABLE t1 ALTER COLUMN t1_3 DROP DEFAULT`,
-				`CREATE INDEX idx_t1_2 ON t1(t1_3)`,
-			},
-		},
-		{
-			name: "add search index",
-			from: `
-CREATE TABLE t1 (
-	t1_1 STRING(MAX) NOT NULL,
-	t1_2 INT64 NOT NULL,
-	t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2);
-`,
-			to: `
-CREATE TABLE t1 (
-	t1_1 STRING(MAX) NOT NULL,
-	t1_2 INT64 NOT NULL,
-	t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1_1 ON t1(t1_2);
-CREATE SEARCH INDEX idx_t1_3 ON t1(t1_3);
-`,
-			expected: []string{
-				`CREATE SEARCH INDEX idx_t1_3 ON t1(t1_3)`,
-			},
-		},
-		{
-			name: "add advanced search index",
-			from: `
-CREATE TABLE t1 (
-	t1_1 STRING(MAX) NOT NULL,
-	t1_2 INT64 NOT NULL,
-	t1_3 TOKENLIST AS (TOKENIZE_SUBSTRING(Name)) HIDDEN,
-	t1_4 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-`,
-			to: `
-CREATE TABLE t1 (
-	t1_1 STRING(MAX) NOT NULL,
-	t1_2 INT64 NOT NULL,
-	t1_3 TOKENLIST AS (TOKENIZE_SUBSTRING(Name)) HIDDEN,
-	t1_4 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE SEARCH INDEX idx_t1_3 ON t1(t1_3) STORING (t1_4)
-PARTITION BY t1_4
-ORDER BY t1_1 DESC, INTERLEAVE IN (t1)
-OPTIONS (sort_order_sharding=true);
-`,
-			expected: []string{
-				`CREATE SEARCH INDEX idx_t1_3 ON t1(t1_3) STORING (t1_4) PARTITION BY t1_4 ORDER BY t1_1 DESC, INTERLEAVE IN (t1) OPTIONS (sort_order_sharding = true)`,
-			},
-		},
-		{
-			name: "alter search index",
-			from: `
-CREATE TABLE t1 (
-	t1_1 STRING(MAX) NOT NULL,
-	t1_2 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
-	t1_3 STRING(MAX) NOT NULL,
-	t1_4 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
-) PRIMARY KEY(t1_1);
-CREATE SEARCH INDEX idx_t1_2 ON t1(t1_2);
-`,
-			to: `
-CREATE TABLE t1 (
-	t1_1 STRING(MAX) NOT NULL,
-	t1_2 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
-	t1_3 STRING(MAX) NOT NULL,
-	t1_4 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
-) PRIMARY KEY(t1_1);
-CREATE SEARCH INDEX idx_t1_2 ON t1(t1_2, t1_4);
-`,
-			expected: []string{
-				`DROP SEARCH INDEX idx_t1_2`,
-				`CREATE SEARCH INDEX idx_t1_2 ON t1(t1_2, t1_4)`,
-			},
-		},
-		{
-			name: "drop search index",
-			from: `
-CREATE TABLE t1 (
-	t1_1 STRING(MAX) NOT NULL,
-	t1_2 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
-	t1_3 STRING(MAX) NOT NULL,
-	t1_4 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
-) PRIMARY KEY(t1_1);
-CREATE SEARCH INDEX idx_t1_2 ON t1(t1_2);
-`,
-			to: `
-CREATE TABLE t1 (
-	t1_1 STRING(MAX) NOT NULL,
-	t1_2 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
-	t1_3 STRING(MAX) NOT NULL,
-	t1_4 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
-) PRIMARY KEY(t1_1);
-`,
-			expected: []string{
-				`DROP SEARCH INDEX idx_t1_2`,
-			},
-		},
-		{
 			name: "change column (interleaved)",
 			from: `
 CREATE TABLE t1 (
@@ -854,10 +637,12 @@ CREATE INDEX idx_t3 ON t3(t3_1);
 				`DROP INDEX idx_t3`,
 				`DROP TABLE t3`,
 				`DROP TABLE t1`,
-				`CREATE TABLE t1 (
+				`
+CREATE TABLE t1 (
   t1_1 STRING(36) NOT NULL
 ) PRIMARY KEY (t1_1)`,
-				`CREATE TABLE t2 (
+				`
+CREATE TABLE t2 (
   t1_1 INT64 NOT NULL,
   t2_1 INT64 NOT NULL,
   t2_2 INT64 NOT NULL,
@@ -865,12 +650,156 @@ CREATE INDEX idx_t3 ON t3(t3_1);
 ) PRIMARY KEY (t1_1, t2_1),
   INTERLEAVE IN PARENT t1 ON DELETE NO ACTION`,
 				`CREATE INDEX idx_t2 ON t2(t2_1)`,
-				`CREATE TABLE t3 (
+				`
+CREATE TABLE t3 (
   t1_1 INT64 NOT NULL,
   t3_1 INT64 NOT NULL
 ) PRIMARY KEY (t1_1, t3_1),
   INTERLEAVE IN PARENT t1 ON DELETE NO ACTION`,
 				`CREATE INDEX idx_t3 ON t3(t3_1)`,
+			},
+		},
+		{
+			name: "multi-level interleave drops grandchild before grandparent",
+			from: `
+CREATE TABLE gp (
+  gp_id INT64 NOT NULL,
+) PRIMARY KEY(gp_id);
+CREATE TABLE p (
+  gp_id INT64 NOT NULL,
+  p_id INT64 NOT NULL,
+) PRIMARY KEY(gp_id, p_id), INTERLEAVE IN PARENT gp ON DELETE NO ACTION;
+CREATE TABLE c (
+  gp_id INT64 NOT NULL,
+  p_id INT64 NOT NULL,
+  c_id INT64 NOT NULL,
+) PRIMARY KEY(gp_id, p_id, c_id), INTERLEAVE IN PARENT p ON DELETE NO ACTION;
+`,
+			to: `
+CREATE TABLE gp (
+  gp_id INT64 NOT NULL,
+) PRIMARY KEY(gp_id);
+`,
+			expected: []string{
+				"DROP TABLE c",
+				"DROP TABLE p",
+			},
+		},
+		{
+			name: "multi-level interleave creates grandparent first",
+			from: `
+CREATE TABLE other (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);`,
+			to: `
+CREATE TABLE other (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE gp (
+  gp_id INT64 NOT NULL,
+) PRIMARY KEY(gp_id);
+CREATE TABLE p (
+  gp_id INT64 NOT NULL,
+  p_id INT64 NOT NULL,
+) PRIMARY KEY(gp_id, p_id), INTERLEAVE IN PARENT gp ON DELETE NO ACTION;
+CREATE TABLE c (
+  gp_id INT64 NOT NULL,
+  p_id INT64 NOT NULL,
+  c_id INT64 NOT NULL,
+) PRIMARY KEY(gp_id, p_id, c_id), INTERLEAVE IN PARENT p ON DELETE NO ACTION;
+`,
+			expected: []string{
+				`
+CREATE TABLE gp (
+  gp_id INT64 NOT NULL
+) PRIMARY KEY (gp_id)`,
+				`
+CREATE TABLE p (
+  gp_id INT64 NOT NULL,
+  p_id INT64 NOT NULL
+) PRIMARY KEY (gp_id, p_id),
+  INTERLEAVE IN PARENT gp ON DELETE NO ACTION`,
+				`
+CREATE TABLE c (
+  gp_id INT64 NOT NULL,
+  p_id INT64 NOT NULL,
+  c_id INT64 NOT NULL
+) PRIMARY KEY (gp_id, p_id, c_id),
+  INTERLEAVE IN PARENT p ON DELETE NO ACTION`,
+			},
+		},
+		{
+			name: "interleave on delete no action is the default (explicit to implicit)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t1_1 INT64 NOT NULL,
+  t2_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1 ON DELETE NO ACTION;
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t1_1 INT64 NOT NULL,
+  t2_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1;
+`,
+			expected: []string{},
+		},
+		{
+			name: "interleave on delete no action is the default (implicit to explicit)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t1_1 INT64 NOT NULL,
+  t2_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1;
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t1_1 INT64 NOT NULL,
+  t2_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1 ON DELETE NO ACTION;
+`,
+			expected: []string{},
+		},
+		{
+			name: "interleave on delete cascade is detected as a real change",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t1_1 INT64 NOT NULL,
+  t2_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1;
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t1_1 INT64 NOT NULL,
+  t2_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1 ON DELETE CASCADE;
+`,
+			expected: []string{
+				"DROP TABLE t2",
+				`
+CREATE TABLE t2 (
+  t1_1 INT64 NOT NULL,
+  t2_1 INT64 NOT NULL
+) PRIMARY KEY (t1_1, t2_1),
+  INTERLEAVE IN PARENT t1 ON DELETE CASCADE`,
 			},
 		},
 		{
@@ -884,7 +813,8 @@ CREATE TABLE t2 (
 ) PRIMARY KEY(t2_1);
 		`,
 			expected: []string{
-				`CREATE TABLE t2 (
+				`
+CREATE TABLE t2 (
   t2_1 INT64 NOT NULL,
   CONSTRAINT FK_t2_1 FOREIGN KEY (t2_1) REFERENCES t1 (t1_1)
 ) PRIMARY KEY (t2_1)`,
@@ -1256,7 +1186,8 @@ CREATE TABLE t2 (
 			expected: []string{
 				`ALTER TABLE t2 DROP CONSTRAINT FK_t2`,
 				`DROP TABLE t1`,
-				`CREATE TABLE t1 (
+				`
+CREATE TABLE t1 (
   t1_1 INT64,
   t1_2 INT64
 ) PRIMARY KEY (t1_2)`,
@@ -1327,6 +1258,81 @@ CREATE INDEX idx_t2_1 ON t2(t2_1);
 			expected: []string{},
 		},
 		{
+			name: "foreign key enforced is the default (explicit to implicit)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t2_1 INT64 NOT NULL,
+  t2_2 INT64,
+  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1) ENFORCED,
+) PRIMARY KEY(t2_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t2_1 INT64 NOT NULL,
+  t2_2 INT64,
+  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1),
+) PRIMARY KEY(t2_1);
+`,
+			expected: []string{},
+		},
+		{
+			name: "foreign key enforced is the default (implicit to explicit)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t2_1 INT64 NOT NULL,
+  t2_2 INT64,
+  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1),
+) PRIMARY KEY(t2_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t2_1 INT64 NOT NULL,
+  t2_2 INT64,
+  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1) ENFORCED,
+) PRIMARY KEY(t2_1);
+`,
+			expected: []string{},
+		},
+		{
+			name: "foreign key not enforced is detected as a real change",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t2_1 INT64 NOT NULL,
+  t2_2 INT64,
+  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1),
+) PRIMARY KEY(t2_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t2_1 INT64 NOT NULL,
+  t2_2 INT64,
+  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1) NOT ENFORCED,
+) PRIMARY KEY(t2_1);
+`,
+			expected: []string{
+				"ALTER TABLE t2 DROP CONSTRAINT FK_t2",
+				"ALTER TABLE t2 ADD CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1) NOT ENFORCED",
+			},
+		},
+		{
 			name: "Create table with ROW DELETION POLICY",
 			from: ``,
 			to: `
@@ -1336,7 +1342,8 @@ CREATE TABLE t1 (
 ) PRIMARY KEY(t1_1), ROW DELETION POLICY (OLDER_THAN(t1_2, INTERVAL 30 DAY));
 		`,
 			expected: []string{
-				`CREATE TABLE t1 (
+				`
+CREATE TABLE t1 (
   t1_1 INT64 NOT NULL,
   t1_2 TIMESTAMP NOT NULL
 ) PRIMARY KEY (t1_1), ROW DELETION POLICY ( OLDER_THAN ( t1_2, INTERVAL 30 DAY ))`,
@@ -1399,430 +1406,660 @@ CREATE TABLE t1 (
 			},
 		},
 		{
-			name: "Alter database, only position's diff",
+			name: "create table IF NOT EXISTS is ignored when comparing (explicit to implicit)",
 			from: `
-
-
-ALTER DATABASE db SET OPTIONS(enable_key_visualizer=true);
-		`,
+CREATE TABLE IF NOT EXISTS t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
 			to: `
-ALTER DATABASE db SET OPTIONS(enable_key_visualizer=true);
-		`,
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
 			expected: []string{},
 		},
 		{
-			name: "remove database options with null",
-			from: `
-ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d', enable_key_visualizer=true);
-		`,
-			to: ``,
-			expected: []string{
-				`ALTER DATABASE db SET OPTIONS (optimizer_version = null, version_retention_period = null, enable_key_visualizer = null)`,
-			},
-		},
-		{
-			name: "from is empty",
-			from: ``,
-			to: `
-ALTER DATABASE db SET OPTIONS(optimizer_version=2);
-			`,
-			expected: []string{
-				`ALTER DATABASE db SET OPTIONS (optimizer_version = 2)`,
-			},
-		},
-		{
-			name: "update database options",
-			from: `
-ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d', enable_key_visualizer=null);
-		`,
-			to: `
-ALTER DATABASE db SET OPTIONS(optimizer_version=2, version_retention_period='2d', enable_key_visualizer=true);
-			`,
-			expected: []string{
-				`ALTER DATABASE db SET OPTIONS (optimizer_version = 2, version_retention_period = "2d", enable_key_visualizer = true)`,
-			},
-		},
-		{
-			name: "update to specify only optimizer_version",
-			from: `
-ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d', enable_key_visualizer=true);
-		`,
-			to: `
-ALTER DATABASE db SET OPTIONS(optimizer_version=2);
-			`,
-			expected: []string{
-				`ALTER DATABASE db SET OPTIONS (optimizer_version = 2, version_retention_period = null, enable_key_visualizer = null)`,
-			},
-		},
-		{
-			name: "update to specify only version_retention_period",
-			from: `
-ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d', enable_key_visualizer=true);
-		`,
-			to: `
-ALTER DATABASE db SET OPTIONS(version_retention_period='4d');
-			`,
-			expected: []string{
-				`ALTER DATABASE db SET OPTIONS (version_retention_period = "4d", optimizer_version = null, enable_key_visualizer = null)`,
-			},
-		},
-		{
-			name: "update to specify only enable_key_visualizer",
-			from: `
-ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d');
-		`,
-			to: `
-ALTER DATABASE db SET OPTIONS(enable_key_visualizer=true);
-			`,
-			expected: []string{
-				`ALTER DATABASE db SET OPTIONS (enable_key_visualizer = true, optimizer_version = null, version_retention_period = null)`,
-			},
-		},
-		{
-			name: "ignore alter database diffs",
-			from: `
-ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d');
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-		`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-			`,
-			ignoreAlterDatabase: true,
-			expected:            []string{},
-		},
-		{
-			name: "drop change stream",
-			from: `
-CREATE CHANGE STREAM SomeStream;
-`,
-			to:                  ``,
-			ignoreAlterDatabase: true,
-			expected:            []string{"DROP CHANGE STREAM SomeStream"},
-		},
-		{
-			name: "drop change stream with watch all",
-			from: `
-CREATE CHANGE STREAM SomeStream FOR ALL;
-`,
-			to:                  ``,
-			ignoreAlterDatabase: true,
-			expected:            []string{"DROP CHANGE STREAM SomeStream"},
-		},
-		{
-			name: "drop change stream with watch tables",
+			name: "create table IF NOT EXISTS is ignored when comparing (implicit to explicit)",
 			from: `
 CREATE TABLE t1 (
   t1_1 INT64 NOT NULL,
 ) PRIMARY KEY(t1_1);
-CREATE CHANGE STREAM SomeStream FOR t1;
+`,
+			to: `
+CREATE TABLE IF NOT EXISTS t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{},
+		},
+		{
+			name: "foreign key inline is equivalent to ALTER TABLE ADD CONSTRAINT",
+			from: `
+CREATE TABLE parent (
+  pid INT64 NOT NULL,
+) PRIMARY KEY(pid);
+CREATE TABLE child (
+  cid INT64 NOT NULL,
+  ref INT64,
+  CONSTRAINT FK_child FOREIGN KEY (ref) REFERENCES parent (pid),
+) PRIMARY KEY(cid);
+`,
+			to: `
+CREATE TABLE parent (
+  pid INT64 NOT NULL,
+) PRIMARY KEY(pid);
+CREATE TABLE child (
+  cid INT64 NOT NULL,
+  ref INT64,
+) PRIMARY KEY(cid);
+ALTER TABLE child ADD CONSTRAINT FK_child FOREIGN KEY (ref) REFERENCES parent (pid);
+`,
+			expected: []string{},
+		},
+		{
+			name: "default value identity is detected as no diff",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  created_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP()),
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  created_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP()),
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{},
+		},
+		{
+			name: "complex modification produces correct order",
+			from: `
+CREATE TABLE parent (
+  pid INT64 NOT NULL,
+) PRIMARY KEY(pid);
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+  CONSTRAINT FK_t1 FOREIGN KEY (t1_2) REFERENCES parent (pid),
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1 ON t1(t1_2);
+CREATE TABLE t2 (
+  t2_1 INT64 NOT NULL,
+  t2_2 INT64,
+  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES parent (pid),
+) PRIMARY KEY(t2_1);
+CREATE INDEX idx_t2 ON t2(t2_2);
+`,
+			to: `
+CREATE TABLE parent (
+  pid INT64 NOT NULL,
+) PRIMARY KEY(pid);
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+  t1_3 INT64,
+  CONSTRAINT FK_t1 FOREIGN KEY (t1_2) REFERENCES parent (pid),
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1 ON t1(t1_3);
+CREATE TABLE t3 (
+  t3_1 INT64 NOT NULL,
+  t3_2 INT64,
+  CONSTRAINT FK_t3 FOREIGN KEY (t3_2) REFERENCES parent (pid),
+) PRIMARY KEY(t3_1);
+`,
+			expected: []string{
+				"DROP INDEX idx_t1",
+				"ALTER TABLE t1 ADD COLUMN t1_3 INT64",
+				"CREATE INDEX idx_t1 ON t1(t1_3)",
+				`
+CREATE TABLE t3 (
+  t3_1 INT64 NOT NULL,
+  t3_2 INT64,
+  CONSTRAINT FK_t3 FOREIGN KEY (t3_2) REFERENCES parent (pid)
+) PRIMARY KEY (t3_1)`,
+				"DROP INDEX idx_t2",
+				"DROP TABLE t2",
+			},
+		},
+		// === INDEX ===
+		{
+			name: "add index",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2);
+CREATE INDEX idx_t1_2 ON t1(t1_3);
+`,
+			expected: []string{
+				`CREATE INDEX idx_t1_2 ON t1(t1_3)`,
+			},
+		},
+		{
+			name: "drop index (different index positions)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+
+CREATE INDEX idx_t1_1 ON t1(t1_2);
+
+CREATE INDEX idx_t1_2 ON t1(t1_3);
+
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_2 ON t1(t1_3);
+`,
+			expected: []string{
+				`DROP INDEX idx_t1_1`,
+			},
+		},
+		{
+			name: "alter index add stored column",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+  t1_4 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2);
+CREATE INDEX idx_t1_2 ON t1(t1_2) STORING (t1_3);
+CREATE INDEX idx_t1_3 ON t1(t1_2);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+  t1_4 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2) STORING (t1_3);
+CREATE INDEX idx_t1_2 ON t1(t1_2) STORING (t1_3, t1_4);
+CREATE INDEX idx_t1_3 ON t1(t1_2) STORING (t1_3, t1_4);
+`,
+			expected: []string{
+				`ALTER INDEX idx_t1_1 ADD STORED COLUMN t1_3`,
+				`ALTER INDEX idx_t1_2 ADD STORED COLUMN t1_4`,
+				`ALTER INDEX idx_t1_3 ADD STORED COLUMN t1_3`,
+				`ALTER INDEX idx_t1_3 ADD STORED COLUMN t1_4`,
+			},
+		},
+		{
+			name: "alter index drop stored column",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+  t1_4 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2) STORING (t1_3);
+CREATE INDEX idx_t1_2 ON t1(t1_2) STORING (t1_3, t1_4);
+CREATE INDEX idx_t1_3 ON t1(t1_2) STORING (t1_3, t1_4);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+  t1_4 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2);
+CREATE INDEX idx_t1_2 ON t1(t1_2) STORING (t1_3);
+CREATE INDEX idx_t1_3 ON t1(t1_2);
+`,
+			expected: []string{
+				`ALTER INDEX idx_t1_1 DROP STORED COLUMN t1_3`,
+				`ALTER INDEX idx_t1_2 DROP STORED COLUMN t1_4`,
+				`ALTER INDEX idx_t1_3 DROP STORED COLUMN t1_3`,
+				`ALTER INDEX idx_t1_3 DROP STORED COLUMN t1_4`,
+			},
+		},
+		{
+			name: "alter index change stored column",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+  t1_4 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2) STORING (t1_3);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+  t1_4 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2) STORING (t1_4);
+`,
+			expected: []string{
+				`ALTER INDEX idx_t1_1 ADD STORED COLUMN t1_4`,
+				`ALTER INDEX idx_t1_1 DROP STORED COLUMN t1_3`,
+			},
+		},
+		{
+			name: "change index columns",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2) STORING (t1_3);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_3) STORING (t1_2);
+`,
+			expected: []string{
+				`DROP INDEX idx_t1_1`,
+				`CREATE INDEX idx_t1_1 ON t1(t1_3) STORING (t1_2)`,
+			},
+		},
+		{
+			name: "change indexed column",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36),
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2);
+CREATE INDEX idx_t1_2 ON t1(t1_3);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2);
+CREATE INDEX idx_t1_2 ON t1(t1_3);
+`,
+			expected: []string{
+				`DROP INDEX idx_t1_2`,
+				`ALTER TABLE t1 DROP COLUMN t1_3`,
+				`ALTER TABLE t1 ADD COLUMN t1_3 INT64 NOT NULL DEFAULT (0)`,
+				`ALTER TABLE t1 ALTER COLUMN t1_3 DROP DEFAULT`,
+				`CREATE INDEX idx_t1_2 ON t1(t1_3)`,
+			},
+		},
+		{
+			name: "create unique index",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+CREATE UNIQUE INDEX idx_t1_2 ON t1(t1_2);
+`,
+			expected: []string{
+				"CREATE UNIQUE INDEX idx_t1_2 ON t1(t1_2)",
+			},
+		},
+		{
+			name: "create null_filtered index",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+CREATE NULL_FILTERED INDEX idx_t1_2 ON t1(t1_2);
+`,
+			expected: []string{
+				"CREATE NULL_FILTERED INDEX idx_t1_2 ON t1(t1_2)",
+			},
+		},
+		{
+			name: "add unique attribute to existing index recreates it",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_2 ON t1(t1_2);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+CREATE UNIQUE INDEX idx_t1_2 ON t1(t1_2);
+`,
+			expected: []string{
+				"DROP INDEX idx_t1_2",
+				"CREATE UNIQUE INDEX idx_t1_2 ON t1(t1_2)",
+			},
+		},
+		{
+			name: "create index with DESC key",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_2 ON t1(t1_2 DESC);
+`,
+			expected: []string{
+				"CREATE INDEX idx_t1_2 ON t1(t1_2 DESC)",
+			},
+		},
+		{
+			name: "change index key direction ASC to DESC recreates it",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_2 ON t1(t1_2);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_2 ON t1(t1_2 DESC);
+`,
+			expected: []string{
+				"DROP INDEX idx_t1_2",
+				"CREATE INDEX idx_t1_2 ON t1(t1_2 DESC)",
+			},
+		},
+		{
+			name: "create index with INTERLEAVE IN",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t1_1 INT64 NOT NULL,
+  t2_1 INT64 NOT NULL,
+  t2_2 INT64,
+) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1 ON DELETE NO ACTION;
 `,
 			to: `
 CREATE TABLE t1 (
   t1_1 INT64 NOT NULL,
 ) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+  t1_1 INT64 NOT NULL,
+  t2_1 INT64 NOT NULL,
+  t2_2 INT64,
+) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1 ON DELETE NO ACTION;
+CREATE INDEX idx_t2_2 ON t2(t1_1, t2_2), INTERLEAVE IN t1;
 `,
-			ignoreAlterDatabase: true,
-			expected:            []string{"DROP CHANGE STREAM SomeStream"},
+			expected: []string{
+				"CREATE INDEX idx_t2_2 ON t2(t1_1, t2_2), INTERLEAVE IN t1",
+			},
 		},
 		{
-			name: "drop change stream with watch columns",
+			name: "create index IF NOT EXISTS is ignored when comparing (explicit to implicit)",
 			from: `
 CREATE TABLE t1 (
   t1_1 INT64 NOT NULL,
+  t1_2 INT64,
 ) PRIMARY KEY(t1_1);
-CREATE CHANGE STREAM SomeStream FOR t1(t1_1);
+CREATE INDEX IF NOT EXISTS idx_t1 ON t1(t1_2);
 `,
 			to: `
 CREATE TABLE t1 (
   t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1 ON t1(t1_2);
+`,
+			expected: []string{},
+		},
+		{
+			name: "create index IF NOT EXISTS is ignored when comparing (implicit to explicit)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1 ON t1(t1_2);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+CREATE INDEX IF NOT EXISTS idx_t1 ON t1(t1_2);
+`,
+			expected: []string{},
+		},
+		// === SEARCH INDEX ===
+		{
+			name: "add search index",
+			from: `
+CREATE TABLE t1 (
+	t1_1 STRING(MAX) NOT NULL,
+	t1_2 INT64 NOT NULL,
+	t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2);
+`,
+			to: `
+CREATE TABLE t1 (
+	t1_1 STRING(MAX) NOT NULL,
+	t1_2 INT64 NOT NULL,
+	t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2);
+CREATE SEARCH INDEX idx_t1_3 ON t1(t1_3);
+`,
+			expected: []string{
+				`CREATE SEARCH INDEX idx_t1_3 ON t1(t1_3)`,
+			},
+		},
+		{
+			name: "add advanced search index",
+			from: `
+CREATE TABLE t1 (
+	t1_1 STRING(MAX) NOT NULL,
+	t1_2 INT64 NOT NULL,
+	t1_3 TOKENLIST AS (TOKENIZE_SUBSTRING(Name)) HIDDEN,
+	t1_4 INT64 NOT NULL,
 ) PRIMARY KEY(t1_1);
 `,
-			ignoreAlterDatabase: true,
-			expected:            []string{"DROP CHANGE STREAM SomeStream"},
-		},
-		{
-			name: "create change stream",
-			from: ``,
 			to: `
-CREATE CHANGE STREAM SomeStream;
+CREATE TABLE t1 (
+	t1_1 STRING(MAX) NOT NULL,
+	t1_2 INT64 NOT NULL,
+	t1_3 TOKENLIST AS (TOKENIZE_SUBSTRING(Name)) HIDDEN,
+	t1_4 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1_3 ON t1(t1_3) STORING (t1_4)
+PARTITION BY t1_4
+ORDER BY t1_1 DESC, INTERLEAVE IN (t1)
+OPTIONS (sort_order_sharding=true);
 `,
-			ignoreAlterDatabase: true,
-			expected:            []string{"CREATE CHANGE STREAM SomeStream"},
-		},
-		{
-			name: "alter change stream watch none to all",
-			from: `
-CREATE CHANGE STREAM SomeStream;
-`,
-			to: `
-CREATE CHANGE STREAM SomeStream FOR ALL;
-`,
-			ignoreAlterDatabase: true,
-			expected:            []string{"ALTER CHANGE STREAM SomeStream SET FOR ALL"},
-		},
-		{
-			name: "alter change stream watch none to table",
-			from: `
-CREATE CHANGE STREAM SomeStream;
-`,
-			to: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE TABLE Albums (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR Singers(id), Albums;
-`,
-			ignoreAlterDatabase: true,
 			expected: []string{
-				`CREATE TABLE Singers (
-  id INT64 NOT NULL
-) PRIMARY KEY (id)`,
-				`CREATE TABLE Albums (
-  id INT64 NOT NULL
-) PRIMARY KEY (id)`,
-				"ALTER CHANGE STREAM SomeStream SET FOR Singers(id), Albums",
+				`CREATE SEARCH INDEX idx_t1_3 ON t1(t1_3) STORING (t1_4) PARTITION BY t1_4 ORDER BY t1_1 DESC, INTERLEAVE IN (t1) OPTIONS (sort_order_sharding = true)`,
 			},
 		},
 		{
-			name: "alter change stream watch all to none",
+			name: "alter search index",
 			from: `
-CREATE CHANGE STREAM SomeStream FOR ALL;
+CREATE TABLE t1 (
+	t1_1 STRING(MAX) NOT NULL,
+	t1_2 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
+	t1_3 STRING(MAX) NOT NULL,
+	t1_4 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1_2 ON t1(t1_2);
 `,
 			to: `
-CREATE CHANGE STREAM SomeStream;
+CREATE TABLE t1 (
+	t1_1 STRING(MAX) NOT NULL,
+	t1_2 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
+	t1_3 STRING(MAX) NOT NULL,
+	t1_4 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1_2 ON t1(t1_2, t1_4);
 `,
-			ignoreAlterDatabase: true,
-			expected:            []string{"ALTER CHANGE STREAM SomeStream DROP FOR ALL"},
-		},
-		{
-			name: "alter change stream watch all to table",
-			from: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE TABLE Albums (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR ALL;
-`,
-			to: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE TABLE Albums (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR Singers(id), Albums;
-`,
-			ignoreAlterDatabase: true,
-			expected:            []string{"ALTER CHANGE STREAM SomeStream SET FOR Singers(id), Albums"},
-		},
-		{
-			name: "alter change stream watch table to none",
-			from: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE TABLE Albums (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR Singers(id), Albums;
-`,
-			to: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE TABLE Albums (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream;
-`,
-			ignoreAlterDatabase: true,
-			expected:            []string{"ALTER CHANGE STREAM SomeStream DROP FOR ALL"},
-		},
-		{
-			name: "alter change stream watch table to all",
-			from: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE TABLE Albums (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR Singers(id), Albums;
-`,
-			to: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE TABLE Albums (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR All;
-`,
-			ignoreAlterDatabase: true,
-			expected:            []string{"ALTER CHANGE STREAM SomeStream SET FOR ALL"},
-		},
-		{
-			name: "alter change stream watch table to other table",
-			from: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR Singers(id);
-`,
-			to: `
-CREATE TABLE Albums (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR Albums;
-`,
-			ignoreAlterDatabase: true,
 			expected: []string{
-				`CREATE TABLE Albums (
-  id INT64 NOT NULL
-) PRIMARY KEY (id)`,
-				"ALTER CHANGE STREAM SomeStream SET FOR Albums",
-				"DROP TABLE Singers",
+				`DROP SEARCH INDEX idx_t1_2`,
+				`CREATE SEARCH INDEX idx_t1_2 ON t1(t1_2, t1_4)`,
 			},
 		},
 		{
-			name: "alter change stream watch column to same table",
+			name: "drop search index",
 			from: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-  name STRING(MAX) NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR Singers(id);
+CREATE TABLE t1 (
+	t1_1 STRING(MAX) NOT NULL,
+	t1_2 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
+	t1_3 STRING(MAX) NOT NULL,
+	t1_4 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1_2 ON t1(t1_2);
 `,
 			to: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-  name STRING(MAX) NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR Singers(name);
+CREATE TABLE t1 (
+	t1_1 STRING(MAX) NOT NULL,
+	t1_2 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
+	t1_3 STRING(MAX) NOT NULL,
+	t1_4 TOKENLIST AS (TOKENIZE_FULLTEXT(Name)) HIDDEN,
+) PRIMARY KEY(t1_1);
 `,
-			ignoreAlterDatabase: true,
-			expected:            []string{"ALTER CHANGE STREAM SomeStream SET FOR Singers(name)"},
-		},
-		{
-			name: "alter change stream watch table to same table",
-			from: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE TABLE Albums (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR Singers(id), Albums;
-`,
-			to: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE TABLE Albums (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR Singers(id), Albums;
-`,
-			ignoreAlterDatabase: true,
-			expected:            []string{},
-		},
-		{
-			name: "delete tables and related change stream",
-			from: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE TABLE Albums (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStream FOR Singers, Albums;
-`,
-			to:                  ``,
-			ignoreAlterDatabase: true,
-			expected:            []string{"DROP CHANGE STREAM SomeStream", "DROP TABLE Singers", "DROP TABLE Albums"},
-		},
-		{
-			name: "delete table and related change streams",
-			from: `
-CREATE TABLE Singers (
-  id INT64 NOT NULL,
-) PRIMARY KEY(id);
-CREATE CHANGE STREAM SomeStreamOne FOR Singers;
-CREATE CHANGE STREAM SomeStreamTwo FOR Singers;
-`,
-			to:                  ``,
-			ignoreAlterDatabase: true,
-			expected:            []string{"DROP CHANGE STREAM SomeStreamOne", "DROP CHANGE STREAM SomeStreamTwo", "DROP TABLE Singers"},
-		},
-		{
-			name: "alter change stream option",
-			from: `
-CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS( retention_period = '36h', value_capture_type = 'NEW_VALUES', exclude_ttl_deletes = false, exclude_insert = false, exclude_update = false, exclude_delete = false, allow_txn_exclusion = false );
-`,
-			to: `
-CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS( retention_period = '5d', value_capture_type = 'NEW_ROW', exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true );
-`,
-			ignoreAlterDatabase: true,
-			expected:            []string{`ALTER CHANGE STREAM SomeStream SET OPTIONS (retention_period = "5d", value_capture_type = "NEW_ROW", exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true)`},
-		},
-		{
-			name: "alter change stream option to default",
-			from: `
-CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS( retention_period = '36h', value_capture_type = 'NEW_VALUES', exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true );
-`,
-			to: `
-CREATE CHANGE STREAM SomeStream FOR ALL;
-`,
-			ignoreAlterDatabase: true,
-			expected:            []string{`ALTER CHANGE STREAM SomeStream SET OPTIONS (retention_period = null, value_capture_type = null, exclude_ttl_deletes = null, exclude_insert = null, exclude_update = null, exclude_delete = null, allow_txn_exclusion = null)`},
-		},
-		{
-			name: "create change stream with all options",
-			from: ``,
-			to: `
-CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS( retention_period = '7d', value_capture_type = 'NEW_ROW', exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true );
-`,
-			ignoreAlterDatabase: true,
-			expected:            []string{`CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS (retention_period = "7d", value_capture_type = "NEW_ROW", exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true)`},
-		},
-		{
-			name: "alter change stream add all options",
-			from: `
-CREATE CHANGE STREAM SomeStream FOR ALL;
-`,
-			to: `
-CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS( retention_period = '7d', value_capture_type = 'NEW_ROW', exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true );
-`,
-			ignoreAlterDatabase: true,
-			expected:            []string{`ALTER CHANGE STREAM SomeStream SET OPTIONS (retention_period = "7d", value_capture_type = "NEW_ROW", exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true)`},
-		},
-		{
-			name: "both sides have identical fields of timestamp with a default value",
-			from: `
-CREATE TABLE Nonces (
-  nonce INT64 NOT NULL,
-  expires TIMESTAMP NOT NULL DEFAULT(TIMESTAMP '2000-01-01 00:00:00.000000+00:00'),
-) PRIMARY KEY(nonce);
-`,
-			to: `
-CREATE TABLE Nonces (
-  nonce INT64 NOT NULL,
-  expires TIMESTAMP NOT NULL DEFAULT(TIMESTAMP '2000-01-01 12:00:00.000000+00:00'),
-) PRIMARY KEY(nonce);
-`,
-			ignoreAlterDatabase: true,
 			expected: []string{
-				`ALTER TABLE Nonces ALTER COLUMN expires TIMESTAMP NOT NULL DEFAULT (TIMESTAMP "2000-01-01 12:00:00.000000+00:00")`,
+				`DROP SEARCH INDEX idx_t1_2`,
 			},
 		},
+		{
+			name: "search index with multi-column PARTITION BY",
+			from: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+  a INT64 NOT NULL,
+  b INT64 NOT NULL,
+  c STRING(MAX),
+  c_tok TOKENLIST AS (TOKENIZE_FULLTEXT(c)) HIDDEN,
+) PRIMARY KEY(id);
+`,
+			to: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+  a INT64 NOT NULL,
+  b INT64 NOT NULL,
+  c STRING(MAX),
+  c_tok TOKENLIST AS (TOKENIZE_FULLTEXT(c)) HIDDEN,
+) PRIMARY KEY(id);
+CREATE SEARCH INDEX idx_c ON t1(c_tok) PARTITION BY a, b;
+`,
+			expected: []string{
+				"CREATE SEARCH INDEX idx_c ON t1(c_tok) PARTITION BY a, b",
+			},
+		},
+		{
+			name: "search index order by ASC is the default (explicit to implicit)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX) NOT NULL,
+  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1 ASC;
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX) NOT NULL,
+  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1;
+`,
+			expected: []string{},
+		},
+		{
+			name: "search index order by ASC is the default (implicit to explicit)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX) NOT NULL,
+  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1;
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX) NOT NULL,
+  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1 ASC;
+`,
+			expected: []string{},
+		},
+		{
+			name: "search index order by DESC is detected as a real change",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX) NOT NULL,
+  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1;
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX) NOT NULL,
+  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
+) PRIMARY KEY(t1_1);
+CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1 DESC;
+`,
+			expected: []string{
+				"DROP SEARCH INDEX idx_t1",
+				"CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1 DESC",
+			},
+		},
+		// === VIEW ===
 		{
 			name: "drop view",
 			from: `
@@ -1887,58 +2124,7 @@ AS SELECT * FROM t1;
 				`CREATE OR REPLACE VIEW v1 SQL SECURITY INVOKER AS SELECT * FROM t1`,
 			},
 		},
-		{
-			name: "table and column names are not case-sensitive",
-			from: `
-CREATE TABLE t1 (
-	t1_1 INT64 NOT NULL,
-	t1_2 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-`,
-			to: `
-CREATE TABLE T1 (
-	t1_1 INT64 NOT NULL,
-	T1_2 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-`,
-			expected: []string{},
-		},
-		{
-			name: "named schema",
-			from: `
-			CREATE TABLE schema.t1 (
-				t1_1 INT64 NOT NULL,
-			) PRIMARY KEY(t1_1);
-			CREATE INDEX schema.idx_t1_1 ON schema.t1(t1_1);
-			`,
-			to: `
-			CREATE TABLE schema.t1 (
-				t1_1 INT64 NOT NULL,
-				t1_2 INT64,
-			) PRIMARY KEY(t1_1);
-			`,
-			expected: []string{
-				"DROP INDEX schema.idx_t1_1",
-				"ALTER TABLE schema.t1 ADD COLUMN t1_2 INT64",
-			},
-		},
-		{
-			name: "keyword identifier",
-			from: `
-			CREATE TABLE ` + "`Order`" + ` (
-				order_1 INT64 NOT NULL,
-			) PRIMARY KEY(order_1);
-			`,
-			to: `
-			CREATE TABLE ` + "`Order`" + ` (
-				order_1 INT64 NOT NULL,
-				order_2 INT64,
-			) PRIMARY KEY(order_1);
-			`,
-			expected: []string{
-				"ALTER TABLE `Order` ADD COLUMN order_2 INT64",
-			},
-		},
+		// === ROLE ===
 		{
 			name: "create role",
 			from: `
@@ -1980,6 +2166,7 @@ CREATE TABLE T1 (
 				`DROP ROLE role2`,
 			},
 		},
+		// === GRANT / REVOKE ===
 		{
 			name: "grant role",
 			from: `
@@ -2164,6 +2351,71 @@ CREATE TABLE T1 (
 			},
 		},
 		{
+			name: "grant insert with column list",
+			from: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+  a INT64,
+  b INT64,
+) PRIMARY KEY(id);
+CREATE ROLE r1;
+`,
+			to: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+  a INT64,
+  b INT64,
+) PRIMARY KEY(id);
+CREATE ROLE r1;
+GRANT INSERT(a, b) ON TABLE t1 TO ROLE r1;
+`,
+			expected: []string{
+				"GRANT INSERT(a, b) ON TABLE t1 TO ROLE r1",
+			},
+		},
+		{
+			name: "grant update with column list",
+			from: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+  a INT64,
+  b INT64,
+) PRIMARY KEY(id);
+CREATE ROLE r1;
+`,
+			to: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+  a INT64,
+  b INT64,
+) PRIMARY KEY(id);
+CREATE ROLE r1;
+GRANT UPDATE(a) ON TABLE t1 TO ROLE r1;
+`,
+			expected: []string{
+				"GRANT UPDATE(a) ON TABLE t1 TO ROLE r1",
+			},
+		},
+		{
+			name: "grant delete privilege",
+			from: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE ROLE r1;
+`,
+			to: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE ROLE r1;
+GRANT DELETE ON TABLE t1 TO ROLE r1;
+`,
+			expected: []string{
+				"GRANT DELETE ON TABLE t1 TO ROLE r1",
+			},
+		},
+		{
 			name: "revoke on table before DROP TABLE",
 			from: `
 				CREATE ROLE role1;
@@ -2181,17 +2433,27 @@ CREATE TABLE T1 (
 			name: "revoke on table before DROP TABLE (PK change triggers drop)",
 			from: `
 				CREATE ROLE role1;
-				CREATE TABLE T1 (id INT64,name STRING(100)) PRIMARY KEY(id);
+				CREATE TABLE T1 (
+  id INT64,
+  name STRING(100),
+) PRIMARY KEY(id);
 				GRANT SELECT ON TABLE T1 TO ROLE role1;
 			`,
 			to: `
 				CREATE ROLE role1;
-				CREATE TABLE T1 (id INT64,name STRING(100)) PRIMARY KEY(name);
+				CREATE TABLE T1 (
+  id INT64,
+  name STRING(100),
+) PRIMARY KEY(name);
 				GRANT SELECT ON TABLE T1 TO ROLE role1;
 			`,
 			expected: []string{
 				`DROP TABLE T1`,
-				"CREATE TABLE T1 (\n  id INT64,\n  name STRING(100)\n) PRIMARY KEY (name)",
+				`
+CREATE TABLE T1 (
+  id INT64,
+  name STRING(100)
+) PRIMARY KEY (name)`,
 				`GRANT SELECT ON TABLE T1 TO ROLE role1`,
 			},
 		},
@@ -2199,21 +2461,37 @@ CREATE TABLE T1 (
 			name: "revoke on table before DROP TABLE (interleave parent changed)",
 			from: `
 				CREATE ROLE role1;
-				CREATE TABLE P1 (pid INT64 NOT NULL) PRIMARY KEY(pid);
-				CREATE TABLE P2 (pid INT64 NOT NULL) PRIMARY KEY(pid);
-				CREATE TABLE T1 (id INT64 NOT NULL) PRIMARY KEY(id), INTERLEAVE IN PARENT P1;
+				CREATE TABLE P1 (
+  pid INT64 NOT NULL,
+) PRIMARY KEY(pid);
+				CREATE TABLE P2 (
+  pid INT64 NOT NULL,
+) PRIMARY KEY(pid);
+				CREATE TABLE T1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id), INTERLEAVE IN PARENT P1;
 				GRANT SELECT ON TABLE T1 TO ROLE role1;
 			`,
 			to: `
 				CREATE ROLE role1;
-				CREATE TABLE P1 (pid INT64 NOT NULL) PRIMARY KEY(pid);
-				CREATE TABLE P2 (pid INT64 NOT NULL) PRIMARY KEY(pid);
-				CREATE TABLE T1 (id INT64 NOT NULL) PRIMARY KEY(id), INTERLEAVE IN PARENT P2;
+				CREATE TABLE P1 (
+  pid INT64 NOT NULL,
+) PRIMARY KEY(pid);
+				CREATE TABLE P2 (
+  pid INT64 NOT NULL,
+) PRIMARY KEY(pid);
+				CREATE TABLE T1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id), INTERLEAVE IN PARENT P2;
 				GRANT SELECT ON TABLE T1 TO ROLE role1;
 			`,
 			expected: []string{
 				`DROP TABLE T1`,
-				"CREATE TABLE T1 (\n  id INT64 NOT NULL\n) PRIMARY KEY (id),\n  INTERLEAVE IN PARENT P2",
+				`
+CREATE TABLE T1 (
+  id INT64 NOT NULL
+) PRIMARY KEY (id),
+  INTERLEAVE IN PARENT P2`,
 				`GRANT SELECT ON TABLE T1 TO ROLE role1`,
 			},
 		},
@@ -2221,19 +2499,30 @@ CREATE TABLE T1 (
 			name: "revoke on table before DROP TABLE (removing interleave)",
 			from: `
 				CREATE ROLE role1;
-				CREATE TABLE P1 (pid INT64 NOT NULL) PRIMARY KEY(pid);
-				CREATE TABLE T1 (id INT64 NOT NULL) PRIMARY KEY(id), INTERLEAVE IN PARENT P1;
+				CREATE TABLE P1 (
+  pid INT64 NOT NULL,
+) PRIMARY KEY(pid);
+				CREATE TABLE T1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id), INTERLEAVE IN PARENT P1;
 				GRANT SELECT ON TABLE T1 TO ROLE role1;
 			`,
 			to: `
 				CREATE ROLE role1;
-				CREATE TABLE P1 (pid INT64 NOT NULL) PRIMARY KEY(pid);
-				CREATE TABLE T1 (id INT64 NOT NULL) PRIMARY KEY(id);
+				CREATE TABLE P1 (
+  pid INT64 NOT NULL,
+) PRIMARY KEY(pid);
+				CREATE TABLE T1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
 				GRANT SELECT ON TABLE T1 TO ROLE role1;
 			`,
 			expected: []string{
 				`DROP TABLE T1`,
-				"CREATE TABLE T1 (\n  id INT64 NOT NULL\n) PRIMARY KEY (id)",
+				`
+CREATE TABLE T1 (
+  id INT64 NOT NULL
+) PRIMARY KEY (id)`,
 				`GRANT SELECT ON TABLE T1 TO ROLE role1`,
 			},
 		},
@@ -2344,39 +2633,498 @@ CREATE TABLE T1 (
 				`DROP ROLE role1`,
 			},
 		},
+		// === CHANGE STREAM ===
+		{
+			name: "drop change stream",
+			from: `
+CREATE CHANGE STREAM SomeStream;
+`,
+			to:                  ``,
+			ignoreAlterDatabase: true,
+			expected:            []string{"DROP CHANGE STREAM SomeStream"},
+		},
+		{
+			name: "drop change stream with watch all",
+			from: `
+CREATE CHANGE STREAM SomeStream FOR ALL;
+`,
+			to:                  ``,
+			ignoreAlterDatabase: true,
+			expected:            []string{"DROP CHANGE STREAM SomeStream"},
+		},
+		{
+			name: "drop change stream with watch tables",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE CHANGE STREAM SomeStream FOR t1;
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{"DROP CHANGE STREAM SomeStream"},
+		},
+		{
+			name: "drop change stream with watch columns",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE CHANGE STREAM SomeStream FOR t1(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{"DROP CHANGE STREAM SomeStream"},
+		},
+		{
+			name: "create change stream",
+			from: ``,
+			to: `
+CREATE CHANGE STREAM SomeStream;
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{"CREATE CHANGE STREAM SomeStream"},
+		},
+		{
+			name: "alter change stream watch none to all",
+			from: `
+CREATE CHANGE STREAM SomeStream;
+`,
+			to: `
+CREATE CHANGE STREAM SomeStream FOR ALL;
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{"ALTER CHANGE STREAM SomeStream SET FOR ALL"},
+		},
+		{
+			name: "alter change stream watch none to table",
+			from: `
+CREATE CHANGE STREAM SomeStream;
+`,
+			to: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE Albums (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers(id), Albums;
+`,
+			ignoreAlterDatabase: true,
+			expected: []string{
+				`
+CREATE TABLE Singers (
+  id INT64 NOT NULL
+) PRIMARY KEY (id)`,
+				`
+CREATE TABLE Albums (
+  id INT64 NOT NULL
+) PRIMARY KEY (id)`,
+				"ALTER CHANGE STREAM SomeStream SET FOR Singers(id), Albums",
+			},
+		},
+		{
+			name: "alter change stream watch all to none",
+			from: `
+CREATE CHANGE STREAM SomeStream FOR ALL;
+`,
+			to: `
+CREATE CHANGE STREAM SomeStream;
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{"ALTER CHANGE STREAM SomeStream DROP FOR ALL"},
+		},
+		{
+			name: "alter change stream watch all to table",
+			from: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE Albums (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR ALL;
+`,
+			to: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE Albums (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers(id), Albums;
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{"ALTER CHANGE STREAM SomeStream SET FOR Singers(id), Albums"},
+		},
+		{
+			name: "alter change stream watch table to none",
+			from: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE Albums (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers(id), Albums;
+`,
+			to: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE Albums (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream;
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{"ALTER CHANGE STREAM SomeStream DROP FOR ALL"},
+		},
+		{
+			name: "alter change stream watch table to all",
+			from: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE Albums (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers(id), Albums;
+`,
+			to: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE Albums (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR All;
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{"ALTER CHANGE STREAM SomeStream SET FOR ALL"},
+		},
+		{
+			name: "alter change stream watch table to other table",
+			from: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers(id);
+`,
+			to: `
+CREATE TABLE Albums (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Albums;
+`,
+			ignoreAlterDatabase: true,
+			expected: []string{
+				`
+CREATE TABLE Albums (
+  id INT64 NOT NULL
+) PRIMARY KEY (id)`,
+				"ALTER CHANGE STREAM SomeStream SET FOR Albums",
+				"DROP TABLE Singers",
+			},
+		},
+		{
+			name: "alter change stream watch column to same table",
+			from: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+  name STRING(MAX) NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers(id);
+`,
+			to: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+  name STRING(MAX) NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers(name);
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{"ALTER CHANGE STREAM SomeStream SET FOR Singers(name)"},
+		},
+		{
+			name: "alter change stream watch table to same table",
+			from: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE Albums (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers(id), Albums;
+`,
+			to: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE Albums (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers(id), Albums;
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{},
+		},
+		{
+			name: "delete tables and related change stream",
+			from: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE Albums (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers, Albums;
+`,
+			to:                  ``,
+			ignoreAlterDatabase: true,
+			expected:            []string{"DROP CHANGE STREAM SomeStream", "DROP TABLE Singers", "DROP TABLE Albums"},
+		},
+		{
+			name: "delete table and related change streams",
+			from: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStreamOne FOR Singers;
+CREATE CHANGE STREAM SomeStreamTwo FOR Singers;
+`,
+			to:                  ``,
+			ignoreAlterDatabase: true,
+			expected:            []string{"DROP CHANGE STREAM SomeStreamOne", "DROP CHANGE STREAM SomeStreamTwo", "DROP TABLE Singers"},
+		},
+		{
+			name: "alter change stream option",
+			from: `
+CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS( retention_period = '36h', value_capture_type = 'NEW_VALUES', exclude_ttl_deletes = false, exclude_insert = false, exclude_update = false, exclude_delete = false, allow_txn_exclusion = false );
+`,
+			to: `
+CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS( retention_period = '5d', value_capture_type = 'NEW_ROW', exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true );
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{`ALTER CHANGE STREAM SomeStream SET OPTIONS (retention_period = "5d", value_capture_type = "NEW_ROW", exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true)`},
+		},
+		{
+			name: "alter change stream option to default",
+			from: `
+CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS( retention_period = '36h', value_capture_type = 'NEW_VALUES', exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true );
+`,
+			to: `
+CREATE CHANGE STREAM SomeStream FOR ALL;
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{`ALTER CHANGE STREAM SomeStream SET OPTIONS (retention_period = null, value_capture_type = null, exclude_ttl_deletes = null, exclude_insert = null, exclude_update = null, exclude_delete = null, allow_txn_exclusion = null)`},
+		},
+		{
+			name: "create change stream with all options",
+			from: ``,
+			to: `
+CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS( retention_period = '7d', value_capture_type = 'NEW_ROW', exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true );
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{`CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS (retention_period = "7d", value_capture_type = "NEW_ROW", exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true)`},
+		},
+		{
+			name: "alter change stream add all options",
+			from: `
+CREATE CHANGE STREAM SomeStream FOR ALL;
+`,
+			to: `
+CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS( retention_period = '7d', value_capture_type = 'NEW_ROW', exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true );
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{`ALTER CHANGE STREAM SomeStream SET OPTIONS (retention_period = "7d", value_capture_type = "NEW_ROW", exclude_ttl_deletes = true, exclude_insert = true, exclude_update = true, exclude_delete = true, allow_txn_exclusion = true)`},
+		},
+		{
+			name: "both sides have identical fields of timestamp with a default value",
+			from: `
+CREATE TABLE Nonces (
+  nonce INT64 NOT NULL,
+  expires TIMESTAMP NOT NULL DEFAULT(TIMESTAMP '2000-01-01 00:00:00.000000+00:00'),
+) PRIMARY KEY(nonce);
+`,
+			to: `
+CREATE TABLE Nonces (
+  nonce INT64 NOT NULL,
+  expires TIMESTAMP NOT NULL DEFAULT(TIMESTAMP '2000-01-01 12:00:00.000000+00:00'),
+) PRIMARY KEY(nonce);
+`,
+			ignoreAlterDatabase: true,
+			expected: []string{
+				`ALTER TABLE Nonces ALTER COLUMN expires TIMESTAMP NOT NULL DEFAULT (TIMESTAMP "2000-01-01 12:00:00.000000+00:00")`,
+			},
+		},
+		{
+			name: "change stream FOR tables order does not matter",
+			from: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE t2 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs FOR t1, t2;
+`,
+			to: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE t2 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs FOR t2, t1;
+`,
+			expected: []string{},
+		},
+		{
+			name: "change stream FOR table column order does not matter",
+			from: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+  a INT64,
+  b INT64,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs FOR t1(a, b);
+`,
+			to: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+  a INT64,
+  b INT64,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs FOR t1(b, a);
+`,
+			expected: []string{},
+		},
+		{
+			name: "change stream FOR tables change is still detected",
+			from: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE t2 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE t3 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs FOR t1, t2;
+`,
+			to: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE t2 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE t3 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs FOR t1, t3;
+`,
+			expected: []string{
+				"ALTER CHANGE STREAM cs SET FOR t1, t3",
+			},
+		},
+		{
+			name: "change stream OPTIONS order does not matter",
+			from: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs FOR t1 OPTIONS (retention_period = '7d', value_capture_type = 'NEW_VALUES');
+`,
+			to: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs FOR t1 OPTIONS (value_capture_type = 'NEW_VALUES', retention_period = '7d');
+`,
+			expected: []string{},
+		},
+		{
+			name: "change stream OPTIONS value change is still detected",
+			from: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs FOR t1 OPTIONS (retention_period = '7d', value_capture_type = 'NEW_VALUES');
+`,
+			to: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs FOR t1 OPTIONS (retention_period = '14d', value_capture_type = 'NEW_VALUES');
+`,
+			expected: []string{
+				`ALTER CHANGE STREAM cs SET OPTIONS (retention_period = "14d", value_capture_type = "NEW_VALUES")`,
+			},
+		},
 		{
 			name: "recreating table and change stream watches multiple tables",
 			from: `
-				CREATE TABLE T1 (id INT64, name STRING(100)) PRIMARY KEY(id, name);
+				CREATE TABLE T1 (
+  id INT64,
+  name STRING(100),
+) PRIMARY KEY(id, name);
 				CREATE TABLE T2 (id INT64 PRIMARY KEY);
 				CREATE CHANGE STREAM CS1 FOR T1, T2;
 			`,
 			to: `
-				CREATE TABLE T1 (id INT64, name STRING(100) NOT NULL) PRIMARY KEY(id, name);
+				CREATE TABLE T1 (
+  id INT64,
+  name STRING(100) NOT NULL,
+) PRIMARY KEY(id, name);
 				CREATE TABLE T2 (id INT64 PRIMARY KEY);
 				CREATE CHANGE STREAM CS1 FOR T1, T2;
 			`,
 			expected: []string{
 				`ALTER CHANGE STREAM CS1 SET FOR T2`,
 				`DROP TABLE T1`,
-				"CREATE TABLE T1 (\n  id INT64,\n  name STRING(100) NOT NULL\n) PRIMARY KEY (id, name)",
+				`
+CREATE TABLE T1 (
+  id INT64,
+  name STRING(100) NOT NULL
+) PRIMARY KEY (id, name)`,
 				`ALTER CHANGE STREAM CS1 SET FOR T1, T2`,
 			},
 		},
 		{
 			name: "recreating table and only change stream is for that table",
 			from: `
-				CREATE TABLE T1 (id INT64, name STRING(100)) PRIMARY KEY(id, name);
+				CREATE TABLE T1 (
+  id INT64,
+  name STRING(100),
+) PRIMARY KEY(id, name);
 				CREATE CHANGE STREAM CS1 FOR T1;
 			`,
 			to: `
-				CREATE TABLE T1 (id INT64, name STRING(100) NOT NULL) PRIMARY KEY(id, name);
+				CREATE TABLE T1 (
+  id INT64,
+  name STRING(100) NOT NULL,
+) PRIMARY KEY(id, name);
 				CREATE CHANGE STREAM CS1 FOR T1;
 			`,
 			expected: []string{
 				`DROP CHANGE STREAM CS1`,
 				`DROP TABLE T1`,
-				"CREATE TABLE T1 (\n  id INT64,\n  name STRING(100) NOT NULL\n) PRIMARY KEY (id, name)",
+				`
+CREATE TABLE T1 (
+  id INT64,
+  name STRING(100) NOT NULL
+) PRIMARY KEY (id, name)`,
 				`CREATE CHANGE STREAM CS1 FOR T1`,
 			},
 		},
@@ -2631,326 +3379,166 @@ CREATE CHANGE STREAM CS2 FOR t2;
 			},
 		},
 		{
-			name: "interleave on delete no action is the default (explicit to implicit)",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE TABLE t2 (
-  t1_1 INT64 NOT NULL,
-  t2_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1 ON DELETE NO ACTION;
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE TABLE t2 (
-  t1_1 INT64 NOT NULL,
-  t2_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1;
-`,
-			expected: []string{},
-		},
-		{
-			name: "interleave on delete no action is the default (implicit to explicit)",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE TABLE t2 (
-  t1_1 INT64 NOT NULL,
-  t2_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1;
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE TABLE t2 (
-  t1_1 INT64 NOT NULL,
-  t2_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1 ON DELETE NO ACTION;
-`,
-			expected: []string{},
-		},
-		{
-			name: "interleave on delete cascade is detected as a real change",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE TABLE t2 (
-  t1_1 INT64 NOT NULL,
-  t2_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1;
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE TABLE t2 (
-  t1_1 INT64 NOT NULL,
-  t2_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1, t2_1), INTERLEAVE IN PARENT t1 ON DELETE CASCADE;
-`,
-			expected: []string{
-				"DROP TABLE t2",
-				"CREATE TABLE t2 (\n  t1_1 INT64 NOT NULL,\n  t2_1 INT64 NOT NULL\n) PRIMARY KEY (t1_1, t2_1),\n  INTERLEAVE IN PARENT t1 ON DELETE CASCADE",
-			},
-		},
-		{
-			name: "foreign key enforced is the default (explicit to implicit)",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE TABLE t2 (
-  t2_1 INT64 NOT NULL,
-  t2_2 INT64,
-  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1) ENFORCED,
-) PRIMARY KEY(t2_1);
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE TABLE t2 (
-  t2_1 INT64 NOT NULL,
-  t2_2 INT64,
-  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1),
-) PRIMARY KEY(t2_1);
-`,
-			expected: []string{},
-		},
-		{
-			name: "foreign key enforced is the default (implicit to explicit)",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE TABLE t2 (
-  t2_1 INT64 NOT NULL,
-  t2_2 INT64,
-  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1),
-) PRIMARY KEY(t2_1);
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE TABLE t2 (
-  t2_1 INT64 NOT NULL,
-  t2_2 INT64,
-  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1) ENFORCED,
-) PRIMARY KEY(t2_1);
-`,
-			expected: []string{},
-		},
-		{
-			name: "foreign key not enforced is detected as a real change",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE TABLE t2 (
-  t2_1 INT64 NOT NULL,
-  t2_2 INT64,
-  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1),
-) PRIMARY KEY(t2_1);
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-) PRIMARY KEY(t1_1);
-CREATE TABLE t2 (
-  t2_1 INT64 NOT NULL,
-  t2_2 INT64,
-  CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1) NOT ENFORCED,
-) PRIMARY KEY(t2_1);
-`,
-			expected: []string{
-				"ALTER TABLE t2 DROP CONSTRAINT FK_t2",
-				"ALTER TABLE t2 ADD CONSTRAINT FK_t2 FOREIGN KEY (t2_2) REFERENCES t1 (t1_1) NOT ENFORCED",
-			},
-		},
-		{
-			name: "search index order by ASC is the default (explicit to implicit)",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(MAX) NOT NULL,
-  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
-) PRIMARY KEY(t1_1);
-CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1 ASC;
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(MAX) NOT NULL,
-  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
-) PRIMARY KEY(t1_1);
-CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1;
-`,
-			expected: []string{},
-		},
-		{
-			name: "search index order by ASC is the default (implicit to explicit)",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(MAX) NOT NULL,
-  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
-) PRIMARY KEY(t1_1);
-CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1;
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(MAX) NOT NULL,
-  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
-) PRIMARY KEY(t1_1);
-CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1 ASC;
-`,
-			expected: []string{},
-		},
-		{
-			name: "search index order by DESC is detected as a real change",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(MAX) NOT NULL,
-  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
-) PRIMARY KEY(t1_1);
-CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1;
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 STRING(MAX) NOT NULL,
-  t1_3 TOKENLIST AS (TOKENIZE_FULLTEXT(t1_2)) HIDDEN,
-) PRIMARY KEY(t1_1);
-CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1 DESC;
-`,
-			expected: []string{
-				"DROP SEARCH INDEX idx_t1",
-				"CREATE SEARCH INDEX idx_t1 ON t1(t1_3) ORDER BY t1_1 DESC",
-			},
-		},
-		{
-			name: "create index IF NOT EXISTS is ignored when comparing (explicit to implicit)",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 INT64,
-) PRIMARY KEY(t1_1);
-CREATE INDEX IF NOT EXISTS idx_t1 ON t1(t1_2);
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 INT64,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1 ON t1(t1_2);
-`,
-			expected: []string{},
-		},
-		{
-			name: "create index IF NOT EXISTS is ignored when comparing (implicit to explicit)",
-			from: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 INT64,
-) PRIMARY KEY(t1_1);
-CREATE INDEX idx_t1 ON t1(t1_2);
-`,
-			to: `
-CREATE TABLE t1 (
-  t1_1 INT64 NOT NULL,
-  t1_2 INT64,
-) PRIMARY KEY(t1_1);
-CREATE INDEX IF NOT EXISTS idx_t1 ON t1(t1_2);
-`,
-			expected: []string{},
-		},
-		{
-			name: "change stream FOR tables order does not matter",
-			from: `
-CREATE TABLE t1 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE TABLE t2 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE CHANGE STREAM cs FOR t1, t2;
-`,
-			to: `
-CREATE TABLE t1 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE TABLE t2 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE CHANGE STREAM cs FOR t2, t1;
-`,
-			expected: []string{},
-		},
-		{
-			name: "change stream FOR table column order does not matter",
+			name: "change stream FOR with empty column list on one table",
 			from: `
 CREATE TABLE t1 (
   id INT64 NOT NULL,
   a INT64,
-  b INT64,
 ) PRIMARY KEY(id);
-CREATE CHANGE STREAM cs FOR t1(a, b);
+CREATE TABLE t2 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs FOR t1(a), t2();
 `,
 			to: `
 CREATE TABLE t1 (
   id INT64 NOT NULL,
   a INT64,
-  b INT64,
 ) PRIMARY KEY(id);
-CREATE CHANGE STREAM cs FOR t1(b, a);
+CREATE TABLE t2 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs FOR t1(a), t2();
 `,
 			expected: []string{},
 		},
 		{
-			name: "change stream FOR tables change is still detected",
+			name: "change stream composite: create, alter FOR, alter OPTIONS, drop in single diff",
 			from: `
-CREATE TABLE t1 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE TABLE t2 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE TABLE t3 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE CHANGE STREAM cs FOR t1, t2;
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE t2 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE t3 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs_zebra_for_change FOR t1 OPTIONS (retention_period = '7d');
+CREATE CHANGE STREAM cs_alpha_options_change FOR t1 OPTIONS (retention_period = '7d');
+CREATE CHANGE STREAM cs_mike_to_drop FOR t1 OPTIONS (retention_period = '7d');
+CREATE CHANGE STREAM cs_unchanged FOR t1 OPTIONS (retention_period = '7d');
 `,
 			to: `
-CREATE TABLE t1 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE TABLE t2 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE TABLE t3 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE CHANGE STREAM cs FOR t1, t3;
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE t2 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE TABLE t3 (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM cs_zebra_for_change FOR t2 OPTIONS (retention_period = '7d');
+CREATE CHANGE STREAM cs_alpha_options_change FOR t1 OPTIONS (retention_period = '14d');
+CREATE CHANGE STREAM cs_papa_to_create FOR t3 OPTIONS (retention_period = '7d');
+CREATE CHANGE STREAM cs_unchanged FOR t1 OPTIONS (retention_period = '7d');
 `,
 			expected: []string{
-				"ALTER CHANGE STREAM cs SET FOR t1, t3",
+				`ALTER CHANGE STREAM cs_alpha_options_change SET OPTIONS (retention_period = "14d")`,
+				"ALTER CHANGE STREAM cs_zebra_for_change SET FOR t2",
+				`CREATE CHANGE STREAM cs_papa_to_create FOR t3 OPTIONS (retention_period = "7d")`,
+				"DROP CHANGE STREAM cs_mike_to_drop",
 			},
 		},
+		// === ALTER DATABASE ===
 		{
-			name: "change stream OPTIONS order does not matter",
+			name: "Alter database, only position's diff",
 			from: `
-CREATE TABLE t1 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE CHANGE STREAM cs FOR t1 OPTIONS (retention_period = '7d', value_capture_type = 'NEW_VALUES');
-`,
+
+
+ALTER DATABASE db SET OPTIONS(enable_key_visualizer=true);
+		`,
 			to: `
-CREATE TABLE t1 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE CHANGE STREAM cs FOR t1 OPTIONS (value_capture_type = 'NEW_VALUES', retention_period = '7d');
-`,
+ALTER DATABASE db SET OPTIONS(enable_key_visualizer=true);
+		`,
 			expected: []string{},
 		},
 		{
-			name: "change stream OPTIONS value change is still detected",
+			name: "remove database options with null",
 			from: `
-CREATE TABLE t1 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE CHANGE STREAM cs FOR t1 OPTIONS (retention_period = '7d', value_capture_type = 'NEW_VALUES');
-`,
-			to: `
-CREATE TABLE t1 (id INT64 NOT NULL) PRIMARY KEY(id);
-CREATE CHANGE STREAM cs FOR t1 OPTIONS (retention_period = '14d', value_capture_type = 'NEW_VALUES');
-`,
+ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d', enable_key_visualizer=true);
+		`,
+			to: ``,
 			expected: []string{
-				`ALTER CHANGE STREAM cs SET OPTIONS (retention_period = "14d", value_capture_type = "NEW_VALUES")`,
+				`ALTER DATABASE db SET OPTIONS (optimizer_version = null, version_retention_period = null, enable_key_visualizer = null)`,
 			},
 		},
+		{
+			name: "from is empty",
+			from: ``,
+			to: `
+ALTER DATABASE db SET OPTIONS(optimizer_version=2);
+			`,
+			expected: []string{
+				`ALTER DATABASE db SET OPTIONS (optimizer_version = 2)`,
+			},
+		},
+		{
+			name: "update database options",
+			from: `
+ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d', enable_key_visualizer=null);
+		`,
+			to: `
+ALTER DATABASE db SET OPTIONS(optimizer_version=2, version_retention_period='2d', enable_key_visualizer=true);
+			`,
+			expected: []string{
+				`ALTER DATABASE db SET OPTIONS (optimizer_version = 2, version_retention_period = "2d", enable_key_visualizer = true)`,
+			},
+		},
+		{
+			name: "update to specify only optimizer_version",
+			from: `
+ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d', enable_key_visualizer=true);
+		`,
+			to: `
+ALTER DATABASE db SET OPTIONS(optimizer_version=2);
+			`,
+			expected: []string{
+				`ALTER DATABASE db SET OPTIONS (optimizer_version = 2, version_retention_period = null, enable_key_visualizer = null)`,
+			},
+		},
+		{
+			name: "update to specify only version_retention_period",
+			from: `
+ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d', enable_key_visualizer=true);
+		`,
+			to: `
+ALTER DATABASE db SET OPTIONS(version_retention_period='4d');
+			`,
+			expected: []string{
+				`ALTER DATABASE db SET OPTIONS (version_retention_period = "4d", optimizer_version = null, enable_key_visualizer = null)`,
+			},
+		},
+		{
+			name: "update to specify only enable_key_visualizer",
+			from: `
+ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d');
+		`,
+			to: `
+ALTER DATABASE db SET OPTIONS(enable_key_visualizer=true);
+			`,
+			expected: []string{
+				`ALTER DATABASE db SET OPTIONS (enable_key_visualizer = true, optimizer_version = null, version_retention_period = null)`,
+			},
+		},
+		{
+			name: "ignore alter database diffs",
+			from: `
+ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d');
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+		`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+			`,
+			ignoreAlterDatabase: true,
+			expected:            []string{},
+		},
+		// === PROTO BUNDLE ===
 		{
 			name: "ignore create proto bundle in from",
 			from: `
@@ -2997,6 +3585,59 @@ CREATE PROTO BUNDLE (foo.bar, baz.qux);
 `,
 			expected: []string{},
 		},
+		// === IDENTIFIERS / NAMING ===
+		{
+			name: "table and column names are not case-sensitive",
+			from: `
+CREATE TABLE t1 (
+	t1_1 INT64 NOT NULL,
+	t1_2 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE T1 (
+	t1_1 INT64 NOT NULL,
+	T1_2 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{},
+		},
+		{
+			name: "named schema",
+			from: `
+			CREATE TABLE schema.t1 (
+				t1_1 INT64 NOT NULL,
+			) PRIMARY KEY(t1_1);
+			CREATE INDEX schema.idx_t1_1 ON schema.t1(t1_1);
+			`,
+			to: `
+			CREATE TABLE schema.t1 (
+				t1_1 INT64 NOT NULL,
+				t1_2 INT64,
+			) PRIMARY KEY(t1_1);
+			`,
+			expected: []string{
+				"DROP INDEX schema.idx_t1_1",
+				"ALTER TABLE schema.t1 ADD COLUMN t1_2 INT64",
+			},
+		},
+		{
+			name: "keyword identifier",
+			from: `
+			CREATE TABLE ` + "`Order`" + ` (
+				order_1 INT64 NOT NULL,
+			) PRIMARY KEY(order_1);
+			`,
+			to: `
+			CREATE TABLE ` + "`Order`" + ` (
+				order_1 INT64 NOT NULL,
+				order_2 INT64,
+			) PRIMARY KEY(order_1);
+			`,
+			expected: []string{
+				"ALTER TABLE `Order` ADD COLUMN order_2 INT64",
+			},
+		},
 	}
 	for _, v := range values {
 		t.Run(v.name, func(t *testing.T) {
@@ -3016,8 +3657,12 @@ CREATE PROTO BUNDLE (foo.bar, baz.qux);
 				t.Fatalf("unexpected error: %v", err)
 			}
 			actual := convertStrings(ddl)
-			if !slices.Equal(v.expected, actual) {
-				t.Error(formatDDLMismatch(v.expected, actual))
+			want := make([]string, len(v.expected))
+			for i, s := range v.expected {
+				want[i] = strings.TrimPrefix(s, "\n")
+			}
+			if !slices.Equal(want, actual) {
+				t.Error(formatDDLMismatch(want, actual))
 			}
 		})
 	}

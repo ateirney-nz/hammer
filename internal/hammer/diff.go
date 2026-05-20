@@ -22,10 +22,9 @@ func Diff(ddl1, ddl2 DDL) (DDL, error) {
 	}
 
 	generator := &Generator{
-		from:                             database1,
-		to:                               database2,
-		willCreateOrAlterChangeStreamIDs: map[string]*ChangeStream{},
-		alteredChangeStreamStates:        map[string]*ChangeStream{},
+		from:                      database1,
+		to:                        database2,
+		alteredChangeStreamStates: map[string]*ChangeStream{},
 	}
 	return generator.GenerateDDL(), nil
 }
@@ -254,13 +253,13 @@ type Generator struct {
 	from *Database
 	to   *Database
 
-	dropedTable                      []string
-	dropedIndex                      []string
-	dropedChangeStream               []string
-	droppedConstraints               []*ast.TableConstraint
-	droppedGrant                     []*Grant
-	willCreateOrAlterChangeStreamIDs map[string]*ChangeStream
-	alteredChangeStreamStates        map[string]*ChangeStream
+	dropedTable                    []string
+	dropedIndex                    []string
+	dropedChangeStream             []string
+	droppedConstraints             []*ast.TableConstraint
+	droppedGrant                   []*Grant
+	willCreateOrAlterChangeStreams []*ChangeStream
+	alteredChangeStreamStates      map[string]*ChangeStream
 }
 
 func (g *Generator) GenerateDDL() DDL {
@@ -312,7 +311,7 @@ func (g *Generator) GenerateDDL() DDL {
 		}
 		ddl.AppendDDL(g.generateDDLForAlterChangeStream(fromChangeStream, toChangeStream))
 	}
-	for _, cs := range g.willCreateOrAlterChangeStreamIDs {
+	for _, cs := range g.willCreateOrAlterChangeStreams {
 		fromChangeStream, exists := g.findChangeStreamByName(g.from, identsToComparable(cs.Name))
 		if !exists || g.isDropedChangeStream(identsToComparable(cs.Name)) {
 			ddl.Append(cs)
@@ -478,9 +477,25 @@ func (g *Generator) generateDDLForCreateTableAndIndex(table *Table) DDL {
 		ddl.Append(i)
 	}
 	for _, cs := range table.changeStreams {
-		g.willCreateOrAlterChangeStreamIDs[identsToComparable(cs.Name)] = cs
+		g.addWillCreateOrAlterChangeStream(cs)
 	}
 	return ddl
+}
+
+func (g *Generator) addWillCreateOrAlterChangeStream(cs *ChangeStream) {
+	if g.isWillCreateOrAlterChangeStream(identsToComparable(cs.Name)) {
+		return
+	}
+	g.willCreateOrAlterChangeStreams = append(g.willCreateOrAlterChangeStreams, cs)
+}
+
+func (g *Generator) isWillCreateOrAlterChangeStream(name string) bool {
+	for _, cs := range g.willCreateOrAlterChangeStreams {
+		if identsToComparable(cs.Name) == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *Generator) generateDDLForDropConstraintIndexAndTable(table *Table) DDL {
@@ -528,9 +543,9 @@ func (g *Generator) generateDDLForDropConstraintIndexAndTable(table *Table) DDL 
 						g.alteredChangeStreamStates[identsToComparable(cs.Name)] = alteredCS
 
 						// Do not emit ALTER here when it is already handled in GenerateDDL
-						// via willCreateOrAlterChangeStreamIDs.
+						// via willCreateOrAlterChangeStreams.
 						// Also emit intermediate SET FOR only when the final target is FOR TABLES.
-						if _, willAlter := g.willCreateOrAlterChangeStreamIDs[identsToComparable(cs.Name)]; !willAlter && toCS.Type() == ChangeStreamTypeTables {
+						if !g.isWillCreateOrAlterChangeStream(identsToComparable(cs.Name)) && toCS.Type() == ChangeStreamTypeTables {
 							ddl.Append(&ast.AlterChangeStream{
 								Name: cs.Name,
 								ChangeStreamAlteration: &ast.ChangeStreamSetFor{
@@ -919,7 +934,7 @@ func (g *Generator) generateDDLForCreateChangeStream(from *Database, to *Table) 
 	ddl := DDL{}
 
 	for _, cs := range to.changeStreams {
-		g.willCreateOrAlterChangeStreamIDs[identsToComparable(cs.Name)] = cs
+		g.addWillCreateOrAlterChangeStream(cs)
 	}
 	return ddl
 }

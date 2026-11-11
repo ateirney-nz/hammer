@@ -45,6 +45,11 @@ func NewClient(ctx context.Context, uri string) (*Client, error) {
 	}, nil
 }
 
+func (c *Client) Close() error {
+	c.client.Close()
+	return c.admin.Close()
+}
+
 func (c *Client) GetDatabaseDDL(ctx context.Context) (string, error) {
 	response, err := c.admin.GetDatabaseDdl(ctx, &databasepb.GetDatabaseDdlRequest{
 		Database: c.database,

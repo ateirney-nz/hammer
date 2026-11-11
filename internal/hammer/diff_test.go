@@ -180,6 +180,7 @@ func runDiffTests(t *testing.T, tests []diffTestCase) {
 			if _, err := hammer.Diff(to, from); err != nil {
 				t.Errorf("to -> from: unexpected error: %v", err)
 			}
+			roundTrip(t, tt.from, tt.to, option)
 		})
 	}
 }

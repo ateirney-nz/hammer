@@ -109,6 +109,14 @@ apply, create, diff and export can accept the flags defined below
 --ignore-proto-bundles    ignore proto bundle statements
 ```
 
+`diff` marks statements that lose data (dropping a table, column, queue or sequence, including the
+drop half of a drop and recreate, and adding or replacing a row deletion policy) with a `-- data loss: <reason>` comment. `apply` refuses to run
+them unless given `--allow-data-loss`.
+
+```
+--allow-data-loss         apply statements that lose data (apply only)
+```
+
 ### Examples
 
 Suppose you have an existing SQL schema like the following:

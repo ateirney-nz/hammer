@@ -89,6 +89,9 @@ var (
 				return err
 			}
 			for _, stmt := range ddl.List {
+				if l, ok := stmt.(hammer.DataLoss); ok {
+					fmt.Println("-- data loss: " + l.Reason)
+				}
 				fmt.Println(stmt.SQL() + ";")
 			}
 			return nil

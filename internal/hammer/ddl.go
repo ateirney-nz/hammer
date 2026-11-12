@@ -13,12 +13,28 @@ type Statement interface {
 	SQL() string
 }
 
+// DataLoss marks a statement that destroys stored data or state.
+type DataLoss struct {
+	Statement
+	Reason string
+}
+
 type DDL struct {
 	List []Statement
 }
 
 func (d *DDL) Append(stmts ...Statement) {
 	d.List = append(d.List, stmts...)
+}
+
+func (d DDL) DataLosses() []DataLoss {
+	var losses []DataLoss
+	for _, stmt := range d.List {
+		if l, ok := stmt.(DataLoss); ok {
+			losses = append(losses, l)
+		}
+	}
+	return losses
 }
 
 func (d *DDL) AppendDDL(ddl DDL) {

@@ -225,6 +225,27 @@ CREATE CHANGE STREAM SomeStream FOR Singers(name);
 			expected:            []string{"ALTER CHANGE STREAM SomeStream SET FOR Singers(name)"},
 		},
 		{
+			name: "stop watching a column before dropping it",
+			from: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+  name STRING(MAX) NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers(name);
+`,
+			to: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers();
+`,
+			ignoreAlterDatabase: true,
+			expected: []string{
+				"ALTER CHANGE STREAM SomeStream SET FOR Singers()",
+				"ALTER TABLE Singers DROP COLUMN name",
+			},
+		},
+		{
 			name: "alter change stream watch table to same table",
 			from: `
 CREATE TABLE Singers (
@@ -809,6 +830,26 @@ CREATE CHANGE STREAM cs_unchanged FOR t1 OPTIONS (retention_period = '7d');
 				"ALTER CHANGE STREAM cs_zebra_for_change SET FOR t2",
 				`CREATE CHANGE STREAM cs_papa_to_create FOR t3 OPTIONS (retention_period = "7d")`,
 				"DROP CHANGE STREAM cs_mike_to_drop",
+			},
+		},
+		{
+			name: "drop a change stream before dropping the column it watches",
+			from: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+  name STRING(MAX) NOT NULL,
+) PRIMARY KEY(id);
+CREATE CHANGE STREAM SomeStream FOR Singers(name);
+`,
+			to: `
+CREATE TABLE Singers (
+  id INT64 NOT NULL,
+) PRIMARY KEY(id);
+`,
+			ignoreAlterDatabase: true,
+			expected: []string{
+				`DROP CHANGE STREAM SomeStream`,
+				`ALTER TABLE Singers DROP COLUMN name`,
 			},
 		},
 	})

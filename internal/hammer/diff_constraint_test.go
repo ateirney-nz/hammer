@@ -558,6 +558,48 @@ ALTER TABLE child ADD CONSTRAINT FK_child FOREIGN KEY (ref) REFERENCES parent (p
 `,
 			expected: []string{},
 		},
+		{
+			name: "retarget a foreign key while an unrelated view mentioning the dropped column changes",
+			from: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+  c INT64,
+  d INT64,
+) PRIMARY KEY(id);
+CREATE TABLE t2 (
+  id INT64 NOT NULL,
+  ref INT64,
+  CONSTRAINT fk1 FOREIGN KEY (ref) REFERENCES t1 (c),
+) PRIMARY KEY(id);
+CREATE TABLE t3 (
+  id INT64 NOT NULL,
+  c INT64,
+) PRIMARY KEY(id);
+CREATE VIEW v1 SQL SECURITY INVOKER AS SELECT t3.c FROM t3;
+`,
+			to: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+  d INT64,
+) PRIMARY KEY(id);
+CREATE TABLE t2 (
+  id INT64 NOT NULL,
+  ref INT64,
+  CONSTRAINT fk1 FOREIGN KEY (ref) REFERENCES t1 (d),
+) PRIMARY KEY(id);
+CREATE TABLE t3 (
+  id INT64 NOT NULL,
+  c INT64,
+) PRIMARY KEY(id);
+CREATE VIEW v1 SQL SECURITY INVOKER AS SELECT t3.id, t3.c FROM t3;
+`,
+			expected: []string{
+				`ALTER TABLE t2 DROP CONSTRAINT fk1`,
+				`ALTER TABLE t2 ADD CONSTRAINT fk1 FOREIGN KEY (ref) REFERENCES t1 (d)`,
+				`CREATE OR REPLACE VIEW v1 SQL SECURITY INVOKER AS SELECT t3.id, t3.c FROM t3`,
+				`ALTER TABLE t1 DROP COLUMN c`,
+			},
+		},
 	})
 }
 
@@ -924,6 +966,32 @@ CREATE TABLE t1 (
 `,
 			expected: []string{
 				`ALTER TABLE t1 DROP COLUMN t1_2`,
+			},
+		},
+		{
+			name: "rename a column checked by a named check constraint and used by a view",
+			from: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+  c INT64,
+  CONSTRAINT chk1 CHECK (c > 0),
+) PRIMARY KEY(id);
+CREATE VIEW v1 SQL SECURITY INVOKER AS SELECT t1.c FROM t1;
+`,
+			to: `
+CREATE TABLE t1 (
+  id INT64 NOT NULL,
+  d INT64,
+  CONSTRAINT chk1 CHECK (d > 0),
+) PRIMARY KEY(id);
+CREATE VIEW v1 SQL SECURITY INVOKER AS SELECT t1.d FROM t1;
+`,
+			expected: []string{
+				`ALTER TABLE t1 ADD COLUMN d INT64`,
+				`ALTER TABLE t1 DROP CONSTRAINT chk1`,
+				`ALTER TABLE t1 ADD CONSTRAINT chk1 CHECK (d > 0)`,
+				`CREATE OR REPLACE VIEW v1 SQL SECURITY INVOKER AS SELECT t1.d FROM t1`,
+				`ALTER TABLE t1 DROP COLUMN c`,
 			},
 		},
 	})

@@ -306,6 +306,7 @@ type Generator struct {
 	droppedConstraints             []droppedConstraint
 	droppedGrants                  []*Grant
 	willCreateOrAlterChangeStreams []*ChangeStream
+	deferredColumnDrops            DDL
 	alteredChangeStreamStates      map[string]*ChangeStream
 }
 
@@ -424,22 +425,17 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 		ddl.AppendDDL(g.generateDDLForAlterChangeStream(fromChangeStream, cs))
 	}
 
-	// drop queues
-	for _, fromQueue := range g.from.queues {
-		name := identsToComparable(fromQueue.Name.Idents...)
-		if g.isDroppedQueue(name) {
+	// for views
+	for _, toView := range g.to.views {
+		fromView, exists := g.findViewByName(g.from.views, identsToComparable(toView.Name.Idents...))
+		if !exists {
+			ddl.Append(toView)
 			continue
 		}
-		if _, exists := g.findQueueByName(g.to.queues, name); !exists {
-			ddl.AppendDDL(g.generateDDLForDropQueue(fromQueue))
+		if g.viewEqual(fromView, toView) {
+			continue
 		}
-	}
-
-	// drop tables
-	for _, fromTable := range g.from.tables {
-		if _, exists := g.findTableByName(g.to.tables, identsToComparable(fromTable.Name.Idents...)); !exists {
-			ddl.AppendDDL(g.generateDDLForDropConstraintIndexAndTable(fromTable))
-		}
+		ddl.AppendDDL(g.generateDDLForReplaceView(fromView, toView))
 	}
 
 	// drop change streams
@@ -467,24 +463,32 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 		}
 	}
 
+	// Spanner rejects dropping a column that a view or change stream still references.
+	ddl.AppendDDL(g.deferredColumnDrops)
+
+	// drop queues
+	for _, fromQueue := range g.from.queues {
+		name := identsToComparable(fromQueue.Name.Idents...)
+		if g.isDroppedQueue(name) {
+			continue
+		}
+		if _, exists := g.findQueueByName(g.to.queues, name); !exists {
+			ddl.AppendDDL(g.generateDDLForDropQueue(fromQueue))
+		}
+	}
+
+	// drop tables
+	for _, fromTable := range g.from.tables {
+		if _, exists := g.findTableByName(g.to.tables, identsToComparable(fromTable.Name.Idents...)); !exists {
+			ddl.AppendDDL(g.generateDDLForDropConstraintIndexAndTable(fromTable))
+		}
+	}
+
 	// drop sequences after every column default that may use them has been dropped
 	for _, fromSequence := range g.from.sequences {
 		if _, exists := g.findSequenceByName(g.to.sequences, identsToComparable(fromSequence.Name.Idents...)); !exists {
 			ddl.AppendDDL(g.generateDDLForDropSequence(fromSequence))
 		}
-	}
-
-	// for views
-	for _, toView := range g.to.views {
-		fromView, exists := g.findViewByName(g.from.views, identsToComparable(toView.Name.Idents...))
-		if !exists {
-			ddl.Append(toView)
-			continue
-		}
-		if g.viewEqual(fromView, toView) {
-			continue
-		}
-		ddl.AppendDDL(g.generateDDLForReplaceView(fromView, toView))
 	}
 
 	// for roles
@@ -835,10 +839,42 @@ func (g *Generator) generateDDLForColumns(from, to *Table) (DDL, error) {
 	}
 	for _, fromCol := range from.Columns {
 		if _, exists := g.findColumnByName(to.Columns, identsToComparable(fromCol.Name)); !exists {
-			ddl.AppendDDL(g.generateDDLForDropColumn(from.Name, fromCol.Name))
+			drop := g.generateDDLForDropColumn(from.Name, fromCol.Name)
+			if g.isReferencedByViewOrChangeStream(fromCol.Name) {
+				// Only the DROP COLUMN waits; the constraint drops before it must stay ahead of any re-added constraint.
+				last := len(drop.List) - 1
+				g.deferredColumnDrops.Append(drop.List[last])
+				drop.List = drop.List[:last]
+			}
+			ddl.AppendDDL(drop)
 		}
 	}
 	return ddl, nil
+}
+
+// isReferencedByViewOrChangeStream reports whether a view or change stream that the diff rewrites
+// or drops mentions the column name, so that must come before the column is dropped.
+func (g *Generator) isReferencedByViewOrChangeStream(column *ast.Ident) bool {
+	mentions := func(n ast.Node) bool {
+		for c := range ast.Preorder(n) {
+			if id, ok := c.(*ast.Ident); ok && strings.EqualFold(id.Name, column.Name) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, v := range g.from.views {
+		if toView, ok := g.findViewByName(g.to.views, identsToComparable(v.Name.Idents...)); ok && !g.viewEqual(v, toView) && mentions(v.Query) {
+			return true
+		}
+	}
+	changeStreams := slices.Clone(g.from.changeStreams)
+	for _, t := range g.from.tables {
+		changeStreams = append(changeStreams, t.changeStreams...)
+	}
+	return slices.ContainsFunc(changeStreams, func(cs *ChangeStream) bool {
+		return cs.For != nil && mentions(cs.For)
+	})
 }
 
 func requireDropAndCreateByDefault(d ast.ColumnDefaultSemantics) bool {

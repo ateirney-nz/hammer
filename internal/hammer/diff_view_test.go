@@ -232,6 +232,32 @@ CREATE TABLE t1 (
 			},
 		},
 		{
+			name: "replace view before dropping the column it stops using",
+			from: `
+CREATE TABLE t1 (
+	t1_1 INT64 NOT NULL,
+	t1_2 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+
+CREATE VIEW v1
+SQL SECURITY INVOKER
+AS SELECT t1.t1_1, t1.t1_2 FROM t1;
+`,
+			to: `
+CREATE TABLE t1 (
+	t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+
+CREATE VIEW v1
+SQL SECURITY INVOKER
+AS SELECT t1.t1_1 FROM t1;
+`,
+			expected: []string{
+				`CREATE OR REPLACE VIEW v1 SQL SECURITY INVOKER AS SELECT t1.t1_1 FROM t1`,
+				`ALTER TABLE t1 DROP COLUMN t1_2`,
+			},
+		},
+		{
 			name: "drop views in reverse definition order",
 			from: `
 CREATE TABLE t1 (
@@ -251,6 +277,34 @@ AS SELECT t1_1 FROM v1;
 				`DROP VIEW v2`,
 				`DROP VIEW v1`,
 				`DROP TABLE t1`,
+			},
+		},
+		{
+			name: "replace view before dropping the table it stops joining",
+			from: `
+CREATE TABLE t1 (
+	t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE TABLE t2 (
+	t2_1 INT64 NOT NULL,
+) PRIMARY KEY(t2_1);
+
+CREATE VIEW v1
+SQL SECURITY INVOKER
+AS SELECT t1.t1_1 FROM t1 JOIN t2 ON t1.t1_1 = t2.t2_1;
+`,
+			to: `
+CREATE TABLE t1 (
+	t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+
+CREATE VIEW v1
+SQL SECURITY INVOKER
+AS SELECT t1.t1_1 FROM t1;
+`,
+			expected: []string{
+				`CREATE OR REPLACE VIEW v1 SQL SECURITY INVOKER AS SELECT t1.t1_1 FROM t1`,
+				`DROP TABLE t2`,
 			},
 		},
 	})

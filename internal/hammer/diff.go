@@ -66,6 +66,12 @@ func NewDatabase(ddl DDL) (*Database, error) {
 			} else {
 				return nil, fmt.Errorf("cannot find ddl of table to apply search index %s", stmt.Name.SQL())
 			}
+		case *ast.CreateVectorIndex:
+			if t, ok := m[identsToComparable(stmt.TableName)]; ok {
+				t.vectorIndexes = append(t.vectorIndexes, stmt)
+			} else {
+				return nil, fmt.Errorf("cannot find ddl of table to apply vector index %s", stmt.Name.SQL())
+			}
 		case *ast.AlterTable:
 			t, ok := m[identsToComparable(stmt.Name.Idents...)]
 			if !ok {
@@ -237,6 +243,7 @@ type Table struct {
 
 	indexes       []*ast.CreateIndex
 	searchIndexes []*ast.CreateSearchIndex
+	vectorIndexes []*ast.CreateVectorIndex
 	children      []*Table
 	queues        []*Queue
 	changeStreams []*ChangeStream
@@ -377,6 +384,7 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 		ddl.AppendDDL(columns)
 		ddl.AppendDDL(g.generateDDLForCreateIndex(fromTable, toTable))
 		ddl.AppendDDL(g.generateDDLForAlterIndex(fromTable, toTable))
+		ddl.AppendDDL(g.generateDDLForAlterVectorIndex(fromTable, toTable))
 		constraintTargets = append(constraintTargets, toTable)
 		ddl.AppendDDL(g.generateDDLForRowDeletionPolicy(fromTable, toTable))
 		ddl.AppendDDL(g.generateDDLForCreateChangeStream(g.from, toTable))
@@ -594,6 +602,9 @@ func (g *Generator) generateDDLForCreateTableAndIndex(table *Table) DDL {
 	for _, i := range table.searchIndexes {
 		ddl.Append(i)
 	}
+	for _, i := range table.vectorIndexes {
+		ddl.Append(i)
+	}
 	for _, cs := range table.changeStreams {
 		g.addWillCreateOrAlterChangeStream(cs)
 	}
@@ -635,6 +646,9 @@ func (g *Generator) generateDDLForDropConstraintIndexAndTable(table *Table) DDL 
 	}
 	for _, i := range table.searchIndexes {
 		ddl.Append(&ast.DropSearchIndex{Name: i.Name})
+	}
+	for _, i := range table.vectorIndexes {
+		ddl.Append(&ast.DropVectorIndex{Name: i.Name})
 	}
 	for _, cs := range table.changeStreams {
 		if g.isDroppedChangeStream(identsToComparable(cs.Name)) {
@@ -1025,6 +1039,16 @@ func (g *Generator) generateDDLForDropAndCreateColumn(from, to *Table, fromCol, 
 		ddl.Append(&ast.DropSearchIndex{Name: i.Name})
 	}
 
+	vectorIndexes := []*ast.CreateVectorIndex{}
+	for _, i := range from.vectorIndexes {
+		if vectorIndexReferencesColumn(i, identsToComparable(fromCol.Name)) && !g.isDroppedIndex(identsToComparable(i.Name)) {
+			vectorIndexes = append(vectorIndexes, i)
+		}
+	}
+	for _, i := range vectorIndexes {
+		ddl.Append(&ast.DropVectorIndex{Name: i.Name})
+	}
+
 	ddl.AppendDDL(g.generateDDLForDropColumn(from.Name, fromCol.Name))
 
 	add, err := g.generateDDLForAddColumn(to.Name, toCol)
@@ -1040,16 +1064,18 @@ func (g *Generator) generateDDLForDropAndCreateColumn(from, to *Table, fromCol, 
 	for _, i := range searchIndexes {
 		ddl.Append(i)
 	}
+	for _, i := range vectorIndexes {
+		recreated := *i
+		recreated.Storing = g.storingKeptIn(i.Storing, to)
+		ddl.Append(&recreated)
+	}
 	return ddl, nil
 }
 
 // storingKeptIn drops the stored columns the target table no longer has, which Spanner would
 // otherwise refuse to drop while the recreated index still stores them.
 func (g *Generator) storingKeptIn(storing *ast.Storing, to *Table) *ast.Storing {
-	if storing == nil {
-		return nil
-	}
-	columns := slices.DeleteFunc(slices.Clone(storing.Columns), func(c *ast.Ident) bool {
+	columns := slices.DeleteFunc(slices.Clone(storingColumns(storing)), func(c *ast.Ident) bool {
 		_, kept := g.findColumnByName(to.Columns, identsToComparable(c))
 		return !kept
 	})
@@ -1092,6 +1118,21 @@ func (g *Generator) generateDDLForDropIndex(from, to *Table) DDL {
 		}
 	}
 
+	for _, toIndex := range to.vectorIndexes {
+		fromIndex, exists := g.findVectorIndexByName(from.vectorIndexes, identsToComparable(toIndex.Name))
+
+		if exists && !g.vectorIndexEqualIgnoringStoring(fromIndex, toIndex) {
+			ddl.Append(&ast.DropVectorIndex{Name: fromIndex.Name})
+			g.droppedIndexes = append(g.droppedIndexes, identsToComparable(fromIndex.Name))
+		}
+	}
+	for _, fromIndex := range from.vectorIndexes {
+		if _, exists := g.findVectorIndexByName(to.vectorIndexes, identsToComparable(fromIndex.Name)); !exists {
+			ddl.Append(&ast.DropVectorIndex{Name: fromIndex.Name})
+			g.droppedIndexes = append(g.droppedIndexes, identsToComparable(fromIndex.Name))
+		}
+	}
+
 	return ddl
 }
 
@@ -1114,6 +1155,14 @@ func (g *Generator) generateDDLForCreateIndex(from, to *Table) DDL {
 		}
 	}
 
+	for _, toIndex := range to.vectorIndexes {
+		fromIndex, exists := g.findVectorIndexByName(from.vectorIndexes, identsToComparable(toIndex.Name))
+
+		if !exists || !g.vectorIndexEqualIgnoringStoring(fromIndex, toIndex) {
+			ddl.Append(toIndex)
+		}
+	}
+
 	return ddl
 }
 
@@ -1130,6 +1179,17 @@ func (g *Generator) generateDDLForDropStoredColumn(from, to *Table) DDL {
 		for _, c := range fromIndex.Storing.Columns {
 			if _, kept := g.findColumnByName(to.Columns, identsToComparable(c)); !kept {
 				ddl.Append(&ast.AlterIndex{Name: toIndex.Name, IndexAlteration: &ast.DropStoredColumn{Name: c}})
+			}
+		}
+	}
+	for _, fromIndex := range from.vectorIndexes {
+		toIndex, exists := g.findVectorIndexByName(to.vectorIndexes, identsToComparable(fromIndex.Name))
+		if !exists || !g.vectorIndexEqualIgnoringStoring(fromIndex, toIndex) {
+			continue
+		}
+		for _, c := range storingColumns(fromIndex.Storing) {
+			if _, kept := g.findColumnByName(to.Columns, identsToComparable(c)); !kept {
+				ddl.Append(&ast.AlterVectorIndex{Name: &ast.Path{Idents: []*ast.Ident{toIndex.Name}}, Alteration: &ast.DropStoredColumn{Name: c}})
 			}
 		}
 	}
@@ -1194,6 +1254,48 @@ func (g *Generator) generateDDLForAlterIndex(from, to *Table) DDL {
 	}
 
 	return ddl
+}
+
+func (g *Generator) generateDDLForAlterVectorIndex(from, to *Table) DDL {
+	ddl := DDL{}
+
+	for _, toIndex := range to.vectorIndexes {
+		fromIndex, exists := g.findVectorIndexByName(from.vectorIndexes, identsToComparable(toIndex.Name))
+		if !exists || !g.vectorIndexEqualIgnoringStoring(fromIndex, toIndex) {
+			continue
+		}
+		name := &ast.Path{Idents: []*ast.Ident{toIndex.Name}}
+		for _, c := range storingColumns(toIndex.Storing) {
+			if _, ok := g.findIdentByName(storingColumns(fromIndex.Storing), identsToComparable(c)); !ok {
+				ddl.Append(&ast.AlterVectorIndex{Name: name, Alteration: &ast.AddStoredColumn{Name: c}})
+			}
+		}
+		for _, c := range storingColumns(fromIndex.Storing) {
+			_, stillStored := g.findIdentByName(storingColumns(toIndex.Storing), identsToComparable(c))
+			_, kept := g.findColumnByName(to.Columns, identsToComparable(c))
+			if !stillStored && kept {
+				ddl.Append(&ast.AlterVectorIndex{Name: name, Alteration: &ast.DropStoredColumn{Name: c}})
+			}
+		}
+		if fromV, toV := g.optionsToMap(fromIndex.Options)[disableSearch], g.optionsToMap(toIndex.Options)[disableSearch]; fromV != toV {
+			var value ast.Expr = &ast.NullLiteral{}
+			if r, ok := findFirst(toIndex.Options.Records, func(r *ast.OptionsDef) bool { return r.Name.Name == disableSearch }); ok {
+				value = r.Value
+			}
+			ddl.Append(&ast.AlterVectorIndex{Name: name, Alteration: &ast.VectorIndexSetOptions{
+				Options: &ast.Options{Records: []*ast.OptionsDef{{Name: &ast.Ident{Name: disableSearch}, Value: value}}},
+			}})
+		}
+	}
+
+	return ddl
+}
+
+func storingColumns(s *ast.Storing) []*ast.Ident {
+	if s == nil {
+		return nil
+	}
+	return s.Columns
 }
 
 func (g *Generator) generateDDLForCreateChangeStream(from *Database, to *Table) DDL {
@@ -1392,6 +1494,25 @@ func (g *Generator) indexEqualIgnoringStoring(x, y *ast.CreateIndex) bool {
 		cmpopts.IgnoreFields(ast.CreateIndex{}, "IfNotExists"),
 		indexKeyComparer,
 	)
+}
+
+// disableSearch is the one vector index option ALTER VECTOR INDEX can change without a rebuild.
+const disableSearch = "disable_search"
+
+// vectorIndexEqualIgnoringStoring also ignores disable_search; both are altered in place.
+func (g *Generator) vectorIndexEqualIgnoringStoring(x, y *ast.CreateVectorIndex) bool {
+	return cmp.Equal(x, y,
+		ignorePos,
+		cmpopts.IgnoreTypes(&ast.Storing{}),
+		cmpopts.IgnoreFields(ast.CreateVectorIndex{}, "IfNotExists", "Options"),
+	) && g.optionsEqual(withoutOption(x.Options, disableSearch), withoutOption(y.Options, disableSearch))
+}
+
+func withoutOption(options *ast.Options, name string) *ast.Options {
+	if options == nil {
+		return nil
+	}
+	return &ast.Options{Records: slices.DeleteFunc(slices.Clone(options.Records), func(r *ast.OptionsDef) bool { return r.Name.Name == name })}
 }
 
 func (g *Generator) searchIndexEqual(x, y *ast.CreateSearchIndex) bool {
@@ -1599,6 +1720,12 @@ func (g *Generator) findSearchIndexByName(indexes []*ast.CreateSearchIndex, name
 	})
 }
 
+func (g *Generator) findVectorIndexByName(indexes []*ast.CreateVectorIndex, name string) (*ast.CreateVectorIndex, bool) {
+	return findFirst(indexes, func(i *ast.CreateVectorIndex) bool {
+		return identsToComparable(i.Name) == name
+	})
+}
+
 func (g *Generator) findSearchIndexByColumn(indexes []*ast.CreateSearchIndex, column string) []*ast.CreateSearchIndex {
 	result := []*ast.CreateSearchIndex{}
 	for _, i := range indexes {
@@ -1648,6 +1775,11 @@ func exprReferencesColumn(expr ast.Expr, column *ast.Ident) bool {
 		}
 	}
 	return false
+}
+
+func vectorIndexReferencesColumn(i *ast.CreateVectorIndex, column string) bool {
+	return identsToComparable(i.ColumnName) == column ||
+		slices.ContainsFunc(storingColumns(i.Storing), func(c *ast.Ident) bool { return identsToComparable(c) == column })
 }
 
 func searchIndexReferencesColumn(i *ast.CreateSearchIndex, column string) bool {

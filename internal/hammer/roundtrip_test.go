@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -100,6 +101,7 @@ var (
 		"TestDiffView/drop_view_before_table_it_references":                                                   "view uses SELECT *, which Spanner does not allow",
 		"TestDiffView/drop_view_before_column_it_references":                                                  "view column is not qualified by its table",
 		"TestDiffView/drop_views_in_reverse_definition_order":                                                 "view column is not qualified by its table",
+		"TestDiffVectorIndex/null_option_is_the_same_as_an_absent_option":                                     "Spanner rejects a NULL vector index option",
 		"TestDiffView/create_a_view_after_the_view_it_selects_from":                                           "view is declared before the view it selects from",
 	}
 
@@ -219,9 +221,13 @@ func parse(t *testing.T, schema string, option *hammer.DDLOption) hammer.DDL {
 func emulatorUnsupported(t *testing.T, option *hammer.DDLOption, schemas ...string) string {
 	for _, schema := range schemas {
 		for _, stmt := range parse(t, schema, option).List {
-			switch stmt.(type) {
+			switch stmt := stmt.(type) {
 			case *ast.CreateQueue:
 				return "the emulator does not support queues"
+			case *ast.CreateVectorIndex:
+				if slices.ContainsFunc(stmt.Options.Records, func(o *ast.OptionsDef) bool { return o.Name.Name == "disable_search" }) {
+					return "the emulator does not support the vector index option disable_search"
+				}
 			case *ast.CreateRole, *ast.Grant:
 				return "the emulator does not return roles and grants from GetDatabaseDdl"
 			}

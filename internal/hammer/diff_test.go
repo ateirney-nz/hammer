@@ -52,12 +52,12 @@ CREATE TABLE t2 (
 		},
 		{
 			name:    "unsupported statement",
-			to:      `CREATE VECTOR INDEX vi ON t1(e) OPTIONS (distance_type = 'COSINE');`,
+			to:      `CREATE MODEL m INPUT (a INT64) OUTPUT (b INT64) REMOTE OPTIONS (endpoint = "x");`,
 			wantErr: "unexpected ddl statement",
 		},
 		{
 			name:    "unsupported statement in from",
-			from:    `CREATE VECTOR INDEX vi ON t1(e) OPTIONS (distance_type = 'COSINE');`,
+			from:    `CREATE MODEL m INPUT (a INT64) OUTPUT (b INT64) REMOTE OPTIONS (endpoint = "x");`,
 			wantErr: "unexpected ddl statement",
 		},
 	})

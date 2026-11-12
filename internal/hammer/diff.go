@@ -38,6 +38,7 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		tables               []*Table
 		changeStreams        []*ChangeStream
 		views                []*View
+		graphs               []*Graph
 		functions            []*Function
 		queues               []*Queue
 		sequences            []*Sequence
@@ -104,6 +105,8 @@ func NewDatabase(ddl DDL) (*Database, error) {
 			}
 		case *ast.CreateView:
 			views = append(views, &View{CreateView: stmt})
+		case *ast.CreatePropertyGraph:
+			graphs = append(graphs, &Graph{CreatePropertyGraph: stmt})
 		case *ast.CreateFunction:
 			functions = append(functions, &Function{CreateFunction: stmt})
 		case *ast.CreateQueue:
@@ -154,6 +157,7 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		tables:               tables,
 		changeStreams:        changeStreams,
 		views:                views,
+		graphs:               graphs,
 		functions:            functions,
 		queues:               queues,
 		sequences:            sequences,
@@ -172,6 +176,7 @@ type Database struct {
 	tables               []*Table
 	changeStreams        []*ChangeStream
 	views                []*View
+	graphs               []*Graph
 	functions            []*Function
 	queues               []*Queue
 	sequences            []*Sequence
@@ -286,6 +291,10 @@ type Queue struct {
 
 type View struct {
 	*ast.CreateView
+}
+
+type Graph struct {
+	*ast.CreatePropertyGraph
 }
 
 type Function struct {
@@ -433,6 +442,17 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 	}
 	if err := g.rejectTablesUsingFunctions(changed, signature, recreatedFunction); err != nil {
 		return DDL{}, err
+	}
+	rebuiltGraphs, err := g.graphsReadingDroppedObjects()
+	if err != nil {
+		return DDL{}, err
+	}
+	// graphs that are removed or read something this diff drops go first, before the views, functions,
+	// tables and columns they read
+	for _, fromGraph := range slices.Backward(g.from.graphs) {
+		if _, exists := g.findGraphByName(g.to.graphs, fromGraph.Name); !exists || rebuiltGraphs[strings.ToLower(fromGraph.Name.Name)] {
+			ddl.Append(&ast.DropPropertyGraph{Name: fromGraph.Name})
+		}
 	}
 	for _, v := range slices.Backward(recreatedViews) {
 		ddl.AppendDDL(g.generateDDLForDropView(v))
@@ -623,6 +643,17 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 		}
 	}
 
+	// create graphs once their tables and columns exist and any table named like a graph is dropped
+	for _, toGraph := range g.to.graphs {
+		fromGraph, exists := g.findGraphByName(g.from.graphs, toGraph.Name)
+		rebuilt := exists && rebuiltGraphs[strings.ToLower(toGraph.Name.Name)]
+		if !exists || rebuilt || graphCanonical(g.from, fromGraph) != graphCanonical(g.to, toGraph) {
+			create := *toGraph.CreatePropertyGraph
+			create.OrReplace = exists && !rebuilt
+			ddl.Append(&create)
+		}
+	}
+
 	// drop functions after the views and functions that call them have been dropped or replaced
 	droppedFunctions, err := sortFunctionsByDependency(g.from.functions)
 	if err != nil {
@@ -709,6 +740,53 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 	}
 
 	return ddl, nil
+}
+
+// graphsReadingDroppedObjects returns the lowercased names of the existing graphs that read a table, view,
+// column or function that the diff drops, recreates, replaces, alters or gives a new signature, found by generating the diff without graphs.
+func (g *Generator) graphsReadingDroppedObjects() (map[string]bool, error) {
+	rebuilt := map[string]bool{}
+	if len(g.from.graphs) == 0 {
+		return rebuilt, nil
+	}
+	from, to := *g.from, *g.to
+	from.graphs, to.graphs = nil, nil
+	ddl, err := (&Generator{from: &from, to: &to, alteredChangeStreamStates: map[string]*ChangeStream{}}).GenerateDDL()
+	if err != nil {
+		return nil, err
+	}
+	dropped := map[string]bool{}
+	for _, stmt := range ddl.List {
+		if loss, ok := stmt.(DataLoss); ok {
+			stmt = loss.Statement
+		}
+		switch stmt := stmt.(type) {
+		case *ast.DropTable:
+			dropped[lowerName(stmt.Name)] = true
+		case *ast.DropView:
+			dropped[lowerName(stmt.Name)] = true
+		case *ast.CreateView:
+			dropped[lowerName(stmt.Name)] = true
+		case AlterColumn:
+			dropped[strings.ToLower(stmt.Table+"."+stmt.Def.Name.Name)] = true
+		case *ast.DropFunction:
+			dropped[functionKey(stmt.Name)] = true
+		case *ast.AlterTable:
+			if drop, ok := stmt.TableAlteration.(*ast.DropColumn); ok {
+				dropped[lowerName(stmt.Name)+"."+strings.ToLower(drop.Name.Name)] = true
+			}
+		}
+	}
+	_, signature := g.changedFunctions()
+	maps.Copy(dropped, signature)
+	for _, graph := range g.from.graphs {
+		for read := range graphReads(g.from, graph) {
+			if dropped[read] {
+				rebuilt[strings.ToLower(graph.Name.Name)] = true
+			}
+		}
+	}
+	return rebuilt, nil
 }
 
 func (g *Generator) generateDDLForAlterDatabaseOptions() DDL {

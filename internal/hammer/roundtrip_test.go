@@ -36,8 +36,6 @@ var (
 	// knownRoundTripFailures are directions whose generated DDL does not round-trip today on any
 	// target. Each fix removes its entries.
 	knownRoundTripFailures = map[string]string{
-		"TestDiffChangeStream/alter_change_stream_option_to_default/round_trip/forward":                                               "options reset to null read back as `= NULL`, which hammer treats as set",
-		"TestDiffChangeStream/alter_change_stream_add_all_options/round_trip/reverse":                                                 "options reset to null read back as `= NULL`, which hammer treats as set",
 		"TestDiffCheckConstraint/unnamed_check_constraint_is_not_dropped_before_the_column_it_references/round_trip/forward":          "Spanner rejects dropping a column an unnamed CHECK constraint references",
 		"TestDiffCheckConstraint/unnamed_check_constraint_is_not_dropped_when_recreating_the_column_it_references/round_trip/forward": "Spanner rejects dropping a column an unnamed CHECK constraint references",
 		"TestDiffCheckConstraint/unnamed_check_constraint_is_not_dropped_when_recreating_the_column_it_references/round_trip/reverse": "Spanner rejects dropping a column an unnamed CHECK constraint references",

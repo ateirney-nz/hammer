@@ -319,6 +319,17 @@ CREATE CHANGE STREAM SomeStream FOR ALL;
 			expected:            []string{`ALTER CHANGE STREAM SomeStream SET OPTIONS (retention_period = null, value_capture_type = null, exclude_ttl_deletes = null, exclude_insert = null, exclude_update = null, exclude_delete = null, allow_txn_exclusion = null)`},
 		},
 		{
+			name: "change stream option reset to null equals no option",
+			from: `
+CREATE CHANGE STREAM SomeStream FOR ALL OPTIONS( retention_period = null, exclude_insert = null );
+`,
+			to: `
+CREATE CHANGE STREAM SomeStream FOR ALL;
+`,
+			ignoreAlterDatabase: true,
+			expected:            []string{},
+		},
+		{
 			name: "create change stream with all options",
 			from: ``,
 			to: `

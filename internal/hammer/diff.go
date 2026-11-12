@@ -1322,12 +1322,15 @@ func (g *Generator) optionsEqual(x, y *ast.Options) bool {
 }
 
 func (g *Generator) optionsToMap(options *ast.Options) map[string]string {
+	m := map[string]string{}
 	if options == nil {
-		return nil
+		return m
 	}
-	m := make(map[string]string, len(options.Records))
 	for _, o := range options.Records {
-		m[o.Name.Name] = o.Value.SQL()
+		// Spanner reads an option reset to its default back as `= NULL`.
+		if _, isNull := o.Value.(*ast.NullLiteral); !isNull {
+			m[o.Name.Name] = o.Value.SQL()
+		}
 	}
 	return m
 }

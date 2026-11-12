@@ -42,6 +42,7 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		queues               []*Queue
 		sequences            []*Sequence
 		models               []*Model
+		localityGroups       []*LocalityGroup
 		roles                []*Role
 		grants               []*Grant
 		alterDatabaseOptions *ast.AlterDatabase
@@ -110,6 +111,14 @@ func NewDatabase(ddl DDL) (*Database, error) {
 			sequences = append(sequences, &Sequence{CreateSequence: stmt})
 		case *ast.CreateModel:
 			models = append(models, &Model{CreateModel: stmt})
+		case *ast.CreateLocalityGroup:
+			localityGroups = append(localityGroups, &LocalityGroup{CreateLocalityGroup: stmt})
+		case *ast.AlterLocalityGroup:
+			// Only the built-in default group exists without a CREATE statement.
+			if _, dup := findFirst(localityGroups, isDefaultLocalityGroup); !strings.EqualFold(stmt.Name.Name, defaultLocalityGroup) || dup {
+				return nil, fmt.Errorf("unexpected ddl statement: %v", stmt.SQL())
+			}
+			localityGroups = append(localityGroups, &LocalityGroup{CreateLocalityGroup: &ast.CreateLocalityGroup{Name: stmt.Name, Options: stmt.Options}})
 		case *ast.CreateRole:
 			roles = append(roles, &Role{CreateRole: stmt})
 		case *ast.Grant:
@@ -146,6 +155,7 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		queues:               queues,
 		sequences:            sequences,
 		models:               models,
+		localityGroups:       localityGroups,
 		roles:                roles,
 		grants:               grants,
 		alterDatabaseOptions: alterDatabaseOptions,
@@ -162,6 +172,7 @@ type Database struct {
 	queues               []*Queue
 	sequences            []*Sequence
 	models               []*Model
+	localityGroups       []*LocalityGroup
 	roles                []*Role
 	grants               []*Grant
 	alterDatabaseOptions *ast.AlterDatabase
@@ -284,6 +295,15 @@ type Model struct {
 	*ast.CreateModel
 }
 
+type LocalityGroup struct {
+	*ast.CreateLocalityGroup
+}
+
+const (
+	defaultLocalityGroup = "default"
+	localityGroupOption  = "locality_group"
+)
+
 type Role struct {
 	*ast.CreateRole
 }
@@ -357,6 +377,19 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 			continue
 		}
 		ddl.AppendDDL(g.generateDDLForAlterSequence(fromSequence, toSequence))
+	}
+
+	// create or alter locality groups before any table or column that uses them
+	for _, toGroup := range g.to.localityGroups {
+		fromGroup, exists := g.findLocalityGroupByName(g.from.localityGroups, toGroup.Name.Name)
+		switch {
+		case exists:
+			ddl.AppendDDL(g.generateDDLForAlterLocalityGroup(fromGroup, toGroup))
+		case isDefaultLocalityGroup(toGroup):
+			ddl.AppendDDL(g.generateDDLForAlterLocalityGroup(&LocalityGroup{&ast.CreateLocalityGroup{Name: toGroup.Name}}, toGroup))
+		default:
+			ddl.Append(toGroup)
+		}
 	}
 
 	// create or replace functions before the views and functions that call them
@@ -446,6 +479,9 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 			continue
 		}
 
+		if options := localityGroupOptions(fromTable.Options, toTable.Options); options != nil {
+			ddl.Append(&ast.AlterTable{Name: toTable.Name, TableAlteration: &ast.AlterTableSetOptions{Options: options}})
+		}
 		ddl.AppendDDL(g.generateDDLForDropIndex(fromTable, toTable))
 		ddl.AppendDDL(g.generateDDLForDropStoredColumn(fromTable, toTable))
 		columns, err := g.generateDDLForColumns(fromTable, toTable)
@@ -591,6 +627,18 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 		if _, exists := g.findSequenceByName(g.to.sequences, identsToComparable(fromSequence.Name.Idents...)); !exists {
 			ddl.AppendDDL(g.generateDDLForDropSequence(fromSequence))
 		}
+	}
+
+	// drop locality groups after every table and column that used them has been dropped or moved
+	for _, fromGroup := range g.from.localityGroups {
+		if _, exists := g.findLocalityGroupByName(g.to.localityGroups, fromGroup.Name.Name); exists {
+			continue
+		}
+		if isDefaultLocalityGroup(fromGroup) {
+			ddl.AppendDDL(g.generateDDLForAlterLocalityGroup(fromGroup, &LocalityGroup{&ast.CreateLocalityGroup{Name: fromGroup.Name}}))
+			continue
+		}
+		ddl.Append(&ast.DropLocalityGroup{Name: fromGroup.Name})
 	}
 
 	// for roles
@@ -916,10 +964,12 @@ func (g *Generator) generateDDLForColumns(from, to *Table) (DDL, error) {
 
 		if isColHidden(fromCol) != isColHidden(toCol) {
 			ddl.Append(AlterColumn{Table: to.Name.SQL(), Def: toCol})
+			ddl.AppendDDL(g.generateDDLForColumnOptions(to, fromCol, toCol))
 			continue
 		}
 
 		if g.columnDefEqual(fromCol, toCol) {
+			ddl.AppendDDL(g.generateDDLForColumnOptions(to, fromCol, toCol))
 			continue
 		}
 
@@ -949,9 +999,7 @@ func (g *Generator) generateDDLForColumns(from, to *Table) (DDL, error) {
 			}
 			ddl.Append(AlterColumn{Table: to.Name.SQL(), Def: toCol})
 		}
-		if isTimestamp && !g.optionsValueEqual(fromCol.Options, toCol.Options, "allow_commit_timestamp") {
-			ddl.Append(AlterColumn{Table: to.Name.SQL(), Def: toCol, SetOptions: true})
-		}
+		ddl.AppendDDL(g.generateDDLForColumnOptions(to, fromCol, toCol))
 	}
 	for _, fromCol := range from.Columns {
 		if _, exists := g.findColumnByName(to.Columns, identsToComparable(fromCol.Name)); !exists {
@@ -991,6 +1039,39 @@ func (g *Generator) isReferencedByViewOrChangeStream(column *ast.Ident) bool {
 	return slices.ContainsFunc(changeStreams, func(cs *ChangeStream) bool {
 		return cs.For != nil && mentions(cs.For)
 	})
+}
+
+func (g *Generator) generateDDLForColumnOptions(table *Table, from, to *ast.ColumnDef) DDL {
+	ddl := DDL{}
+	if st, ok := from.Type.(*ast.ScalarSchemaType); ok && st.Name == ast.TimestampTypeName && !g.optionsValueEqual(from.Options, to.Options, "allow_commit_timestamp") {
+		ddl.Append(AlterColumn{Table: table.Name.SQL(), Def: to, SetOptions: true})
+	}
+	if options := localityGroupOptions(from.Options, to.Options); options != nil {
+		ddl.Append(&ast.AlterTable{Name: table.Name, TableAlteration: &ast.AlterColumn{Name: to.Name, Alteration: &ast.AlterColumnSetOptions{Options: options}}})
+	}
+	return ddl
+}
+
+// localityGroupOptions returns the SET OPTIONS that move a table or column between locality groups,
+// or nil when it stays. An object with no locality_group is in the default group, and Spanner
+// rejects locality_group = NULL, so leaving a group names the default one.
+func localityGroupOptions(from, to *ast.Options) *ast.Options {
+	if strings.EqualFold(localityGroupOf(from), localityGroupOf(to)) {
+		return nil
+	}
+	return &ast.Options{Records: []*ast.OptionsDef{{
+		Name:  &ast.Ident{Name: localityGroupOption},
+		Value: &ast.StringLiteral{Value: localityGroupOf(to)},
+	}}}
+}
+
+func localityGroupOf(options *ast.Options) string {
+	if v := optionsValueFromName(options, localityGroupOption); v != nil {
+		if s, ok := (*v).(*ast.StringLiteral); ok {
+			return s.Value
+		}
+	}
+	return defaultLocalityGroup
 }
 
 // columnTypeAlterable reports whether the column can change type in place. A column used by a
@@ -1543,7 +1624,7 @@ func primaryKeysForComparison(table *Table) []*ast.IndexKey {
 func (g *Generator) columnDefEqual(x, y *ast.ColumnDef) bool {
 	return cmp.Equal(x, y,
 		ignorePos,
-		cmpopts.IgnoreFields(ast.ColumnDef{}, "PrimaryKey"),
+		cmpopts.IgnoreFields(ast.ColumnDef{}, "PrimaryKey", "Options"),
 		cmp.Comparer(func(x, y *ast.Ident) bool {
 			return strings.EqualFold(x.Name, y.Name)
 		}),
@@ -1582,6 +1663,7 @@ func (g *Generator) indexEqualIgnoringStoring(x, y *ast.CreateIndex) bool {
 		cmpopts.IgnoreTypes(&ast.Storing{}),
 		cmpopts.IgnoreFields(ast.CreateIndex{}, "IfNotExists"),
 		indexKeyComparer,
+		g.indexOptionsComparer(),
 	)
 }
 
@@ -1605,7 +1687,20 @@ func withoutOption(options *ast.Options, name string) *ast.Options {
 }
 
 func (g *Generator) searchIndexEqual(x, y *ast.CreateSearchIndex) bool {
-	return cmp.Equal(x, y, ignorePos, orderByItemComparer)
+	return cmp.Equal(x, y, ignorePos, orderByItemComparer, g.indexOptionsComparer())
+}
+
+// indexOptionsComparer treats an index in the default locality group as one with no locality group.
+func (g *Generator) indexOptionsComparer() cmp.Option {
+	withoutDefault := func(o *ast.Options) *ast.Options {
+		if o == nil {
+			return nil
+		}
+		return &ast.Options{Records: slices.DeleteFunc(slices.Clone(o.Records), func(r *ast.OptionsDef) bool {
+			return r.Name.Name == localityGroupOption && strings.EqualFold(localityGroupOf(&ast.Options{Records: []*ast.OptionsDef{r}}), defaultLocalityGroup)
+		})}
+	}
+	return cmp.Comparer(func(x, y *ast.Options) bool { return g.optionsEqual(withoutDefault(x), withoutDefault(y)) })
 }
 
 func (g *Generator) changeStreamForEqual(x, y ast.ChangeStreamFor) bool {
@@ -2001,7 +2096,7 @@ func (g *Generator) queueColumnsEqual(x, y *Queue) bool {
 	}
 	for _, yCol := range y.Columns {
 		xCol, exists := g.findColumnByName(x.Columns, identsToComparable(yCol.Name))
-		if !exists || isColHidden(xCol) != isColHidden(yCol) || !g.columnDefEqual(xCol, yCol) {
+		if !exists || isColHidden(xCol) != isColHidden(yCol) || !g.columnDefEqual(xCol, yCol) || !g.optionsEqual(xCol.Options, yCol.Options) {
 			return false
 		}
 	}
@@ -2141,6 +2236,22 @@ func (g *Generator) generateDDLForAlterModel(from, to *Model) DDL {
 	}
 	if len(records) > 0 {
 		ddl.Append(&ast.AlterModel{Name: to.Name, Options: &ast.Options{Records: records}})
+	}
+	return ddl
+}
+
+func (g *Generator) findLocalityGroupByName(groups []*LocalityGroup, name string) (*LocalityGroup, bool) {
+	return findFirst(groups, func(lg *LocalityGroup) bool { return strings.EqualFold(lg.Name.Name, name) })
+}
+
+func isDefaultLocalityGroup(group *LocalityGroup) bool {
+	return strings.EqualFold(group.Name.Name, defaultLocalityGroup)
+}
+
+func (g *Generator) generateDDLForAlterLocalityGroup(from, to *LocalityGroup) DDL {
+	ddl := DDL{}
+	if !g.optionsEqual(from.Options, to.Options) {
+		ddl.Append(&ast.AlterLocalityGroup{Name: to.Name, Options: optionsForSet(from.Options, to.Options)})
 	}
 	return ddl
 }

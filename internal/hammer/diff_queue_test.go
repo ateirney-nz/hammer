@@ -570,5 +570,28 @@ GRANT SELECT ON QUEUE Q TO ROLE R;
 				`DROP ROLE R`,
 			},
 		},
+		{
+			name: "change queue column options recreates the queue",
+			from: `
+CREATE QUEUE Q (
+  Id INT64 NOT NULL,
+  Ts TIMESTAMP,
+) PRIMARY KEY (Id);
+`,
+			to: `
+CREATE QUEUE Q (
+  Id INT64 NOT NULL,
+  Ts TIMESTAMP OPTIONS (allow_commit_timestamp = true),
+) PRIMARY KEY (Id);
+`,
+			expected: []string{
+				`DROP QUEUE Q`,
+				`
+CREATE QUEUE Q (
+  Id INT64 NOT NULL,
+  Ts TIMESTAMP OPTIONS (allow_commit_timestamp = true)
+) PRIMARY KEY (Id)`,
+			},
+		},
 	})
 }

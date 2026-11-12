@@ -48,13 +48,30 @@ var (
 
 	// emulatorKnownRoundTripFailures are known failures on the emulator only.
 	emulatorKnownRoundTripFailures = map[string]string{
-		"TestDiffFunction/schema_names_are_case-sensitive/round_trip/forward":                             "the emulator treats schema names case-insensitively",
-		"TestDiffFunction/schema_names_are_case-sensitive/round_trip/reverse":                             "the emulator treats schema names case-insensitively",
-		"TestDiffAlterDatabase/remove_an_option_the_generator_has_no_special_case_for/round_trip/forward": "the emulator rejects default_leader = null",
-		"TestDiffColumn/add_hidden_attribute_to_column/round_trip/forward":                                "the emulator rejects HIDDEN in ALTER COLUMN",
-		"TestDiffColumn/add_hidden_attribute_to_column/round_trip/reverse":                                "the emulator keeps HIDDEN when ALTER COLUMN omits it",
-		"TestDiffColumn/remove_hidden_attribute_from_column/round_trip/forward":                           "the emulator keeps HIDDEN when ALTER COLUMN omits it",
-		"TestDiffColumn/remove_hidden_attribute_from_column/round_trip/reverse":                           "the emulator rejects HIDDEN in ALTER COLUMN",
+		"TestDiffFunction/schema_names_are_case-sensitive/round_trip/forward":                                        "the emulator treats schema names case-insensitively",
+		"TestDiffFunction/schema_names_are_case-sensitive/round_trip/reverse":                                        "the emulator treats schema names case-insensitively",
+		"TestDiffAlterDatabase/remove_an_option_the_generator_has_no_special_case_for/round_trip/forward":            "the emulator rejects default_leader = null",
+		"TestDiffColumn/add_hidden_attribute_to_column/round_trip/forward":                                           "the emulator rejects HIDDEN in ALTER COLUMN",
+		"TestDiffColumn/add_hidden_attribute_to_column/round_trip/reverse":                                           "the emulator keeps HIDDEN when ALTER COLUMN omits it",
+		"TestDiffColumn/remove_hidden_attribute_from_column/round_trip/forward":                                      "the emulator keeps HIDDEN when ALTER COLUMN omits it",
+		"TestDiffColumn/remove_hidden_attribute_from_column/round_trip/reverse":                                      "the emulator rejects HIDDEN in ALTER COLUMN",
+		"TestDiffLocalityGroup/create_locality_group_before_the_table_and_column_that_use_it/round_trip/forward":     "the emulator reads table and column locality groups back empty and rejects moving back to the default one",
+		"TestDiffLocalityGroup/create_locality_group_before_the_table_and_column_that_use_it/round_trip/reverse":     "the emulator reads table and column locality groups back empty and rejects moving back to the default one",
+		"TestDiffLocalityGroup/drop_locality_group_after_the_table_and_column_that_used_it/round_trip/forward":       "the emulator reads table and column locality groups back empty and rejects moving back to the default one",
+		"TestDiffLocalityGroup/drop_locality_group_after_the_table_and_column_that_used_it/round_trip/reverse":       "the emulator reads table and column locality groups back empty and rejects moving back to the default one",
+		"TestDiffLocalityGroup/move_a_table_and_a_column_between_locality_groups/round_trip/forward":                 "the emulator reads table and column locality groups back empty and rejects moving back to the default one",
+		"TestDiffLocalityGroup/move_a_table_and_a_column_between_locality_groups/round_trip/reverse":                 "the emulator reads table and column locality groups back empty and rejects moving back to the default one",
+		"TestDiffLocalityGroup/locality_group_on_a_timestamp_column_keeps_allow_commit_timestamp/round_trip/forward": "the emulator reads table and column locality groups back empty and rejects moving back to the default one",
+		"TestDiffLocalityGroup/locality_group_on_a_timestamp_column_keeps_allow_commit_timestamp/round_trip/reverse": "the emulator reads table and column locality groups back empty and rejects moving back to the default one",
+		"TestDiffLocalityGroup/drop_a_table_and_its_locality_group/round_trip/forward":                               "the emulator fails the batch with an internal RET_CHECK error (schema_graph_editor.cc:120)",
+		"TestDiffLocalityGroup/drop_a_table_and_its_locality_group/round_trip/reverse":                               "the emulator reads table and column locality groups back empty and rejects moving back to the default one",
+		"TestDiffLocalityGroup/move_an_index_between_locality_groups_rebuilds_it/round_trip/forward":                 "the emulator reads index locality groups back empty",
+		"TestDiffLocalityGroup/move_an_index_between_locality_groups_rebuilds_it/round_trip/reverse":                 "the emulator fails DROP INDEX plus CREATE INDEX of one index in a batch with an internal RET_CHECK error (schema_graph_editor.cc:120)",
+		"TestDiffLocalityGroup/allow_commit_timestamp_change_after_a_hidden_change/round_trip/forward":               "the emulator rejects HIDDEN in ALTER COLUMN",
+		"TestDiffLocalityGroup/allow_commit_timestamp_change_after_a_hidden_change/round_trip/reverse":               "the emulator keeps HIDDEN when ALTER COLUMN omits it",
+		"TestDiffLocalityGroup/remove_a_locality_group_option_resets_it/round_trip/forward":                          "the emulator prints a reset locality group option as a trailing comma memefish cannot parse",
+		"TestDiffLocalityGroup/alter_the_default_locality_group/round_trip/reverse":                                  "the emulator prints a reset locality group option as a trailing comma memefish cannot parse",
+		"TestDiffLocalityGroup/removing_the_default_locality_group_alteration_resets_its_options/round_trip/forward": "the emulator prints a reset locality group option as a trailing comma memefish cannot parse",
 	}
 
 	// invalidSchemas are cases whose from or to schema Spanner rejects on any target, so a round trip
@@ -117,6 +134,8 @@ var (
 
 	// emulatorInvalidSchemas are cases whose schema only the emulator rejects.
 	emulatorInvalidSchemas = map[string]string{
+		"TestDiffLocalityGroup/locality_group_names_in_table_options_are_case-insensitive":                           "the emulator rejects locality_group = 'default' (Locality group not found)",
+		"TestDiffLocalityGroup/an_index_in_the_default_locality_group_is_the_same_as_one_with_no_locality_group":     "the emulator rejects locality_group = 'default' (Locality group not found)",
 		"TestDiffFunction/change_the_body_of_a_function_without_RETURNS_under_a_view_that_calls_it":                  "the emulator cannot store a function without RETURNS",
 		"TestDiffFunction/create_function_before_the_generated_column_that_calls_it":                                 "the emulator rejects a function in a stored generated column",
 		"TestDiffFunction/drop_function_after_the_generated_column_that_called_it":                                   "the emulator rejects a function in a stored generated column",
@@ -133,6 +152,7 @@ var (
 		"TestDiffAlterDatabase/update_to_specify_only_optimizer_version":                                             "the emulator does not support this database option",
 		"TestDiffAlterDatabase/update_to_specify_only_version_retention_period":                                      "the emulator does not support this database option",
 		"TestDiffAlterDatabase/update_to_specify_only_enable_key_visualizer":                                         "the emulator does not support this database option",
+		"TestDiffLocalityGroup/a_table_in_the_default_locality_group_is_the_same_as_one_with_no_locality_group":      "the emulator cannot find the default locality group",
 	}
 )
 

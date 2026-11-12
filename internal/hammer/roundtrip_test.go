@@ -47,10 +47,11 @@ var (
 
 	// emulatorKnownRoundTripFailures are known failures on the emulator only.
 	emulatorKnownRoundTripFailures = map[string]string{
-		"TestDiffColumn/add_hidden_attribute_to_column/round_trip/forward":      "the emulator rejects HIDDEN in ALTER COLUMN",
-		"TestDiffColumn/add_hidden_attribute_to_column/round_trip/reverse":      "the emulator keeps HIDDEN when ALTER COLUMN omits it",
-		"TestDiffColumn/remove_hidden_attribute_from_column/round_trip/forward": "the emulator keeps HIDDEN when ALTER COLUMN omits it",
-		"TestDiffColumn/remove_hidden_attribute_from_column/round_trip/reverse": "the emulator rejects HIDDEN in ALTER COLUMN",
+		"TestDiffAlterDatabase/remove_an_option_the_generator_has_no_special_case_for/round_trip/forward": "the emulator rejects default_leader = null",
+		"TestDiffColumn/add_hidden_attribute_to_column/round_trip/forward":                                "the emulator rejects HIDDEN in ALTER COLUMN",
+		"TestDiffColumn/add_hidden_attribute_to_column/round_trip/reverse":                                "the emulator keeps HIDDEN when ALTER COLUMN omits it",
+		"TestDiffColumn/remove_hidden_attribute_from_column/round_trip/forward":                           "the emulator keeps HIDDEN when ALTER COLUMN omits it",
+		"TestDiffColumn/remove_hidden_attribute_from_column/round_trip/reverse":                           "the emulator rejects HIDDEN in ALTER COLUMN",
 	}
 
 	// invalidSchemas are cases whose from or to schema Spanner rejects on any target, so a round trip
@@ -111,6 +112,7 @@ var (
 	emulatorInvalidSchemas = map[string]string{
 		"TestDiffCheckConstraint/recreating_a_column_does_not_re-add_a_same-named_check_constraint_on_another_table": "two constraints share a name",
 		"TestDiffChangeStream/change_stream_OPTIONS_value_change_is_still_detected":                                  "change stream retention period is out of range",
+		"TestDiffAlterDatabase/remove_one_option_and_keep_another":                                                   "the emulator does not support this database option",
 		"TestDiffAlterDatabase/whitespace-only_difference_is_no-op":                                                  "the emulator does not support this database option",
 		"TestDiffAlterDatabase/remove_database_options_with_null":                                                    "the emulator does not support this database option",
 		"TestDiffAlterDatabase/set_database_options_from_empty":                                                      "the emulator does not support this database option",
@@ -166,7 +168,8 @@ func applyAndCompare(t *testing.T, client *hammer.Client, from, to string, optio
 		}
 	}
 	ctx := context.Background()
-	ddl, err := hammer.Diff(parse(t, from, option), parse(t, to, option))
+	want := parse(t, to, option)
+	ddl, err := hammer.Diff(parse(t, from, option), want)
 	if err != nil {
 		t.Fatalf("failed to diff: %v", err)
 	}
@@ -178,8 +181,7 @@ func applyAndCompare(t *testing.T, client *hammer.Client, from, to string, optio
 	if err := retryQuota(func() (err error) { schema, err = client.GetDatabaseDDL(ctx); return }); err != nil {
 		t.Fatalf("failed to read schema back: %v", err)
 	}
-	// Diff mutates its inputs, so the target is parsed afresh for the comparison.
-	rest, err := hammer.Diff(parse(t, schema, option), parse(t, to, option))
+	rest, err := hammer.Diff(parse(t, schema, option), want)
 	if err != nil {
 		t.Fatalf("failed to diff schema read back: %v\n%s", err, schema)
 	}

@@ -1,6 +1,12 @@
 package hammer_test
 
-import "testing"
+import (
+	"context"
+	"slices"
+	"testing"
+
+	"github.com/daichirata/hammer/internal/hammer"
+)
 
 func TestDiffSchema(t *testing.T) {
 	runDiffTests(t, []diffTestCase{
@@ -138,6 +144,28 @@ ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d'
 			},
 		},
 		{
+			name: "remove an option the generator has no special case for",
+			from: `
+ALTER DATABASE db SET OPTIONS(default_leader='us-east1');
+		`,
+			to: ``,
+			expected: []string{
+				`ALTER DATABASE db SET OPTIONS (default_leader = null)`,
+			},
+		},
+		{
+			name: "remove one option and keep another",
+			from: `
+ALTER DATABASE db SET OPTIONS(optimizer_version=3, default_leader='us-east1');
+		`,
+			to: `
+ALTER DATABASE db SET OPTIONS(optimizer_version=3);
+		`,
+			expected: []string{
+				`ALTER DATABASE db SET OPTIONS (optimizer_version = 3, default_leader = null)`,
+			},
+		},
+		{
 			name: "set database options from empty",
 			from: ``,
 			to: `
@@ -266,4 +294,33 @@ CREATE PROTO BUNDLE (foo.bar, baz.qux);
 			expected:           []string{},
 		},
 	})
+}
+
+func TestDiffAlterDatabaseKeepsTarget(t *testing.T) {
+	ctx := context.Background()
+	parse := func(schema string) hammer.DDL {
+		ddl, err := StringSource(schema).DDL(ctx, &hammer.DDLOption{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ddl
+	}
+	to := parse(`ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d', enable_key_visualizer=true, a=1, b=2);`)
+	toSQL := convertStrings(to)
+
+	// Both results stay in use, so a diff that wrote into the target's option list would overwrite the first.
+	first, err := hammer.Diff(parse(`ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d', enable_key_visualizer=true, a=1, b=2, default_leader='a');`), to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSQL := convertStrings(first)
+	if _, err := hammer.Diff(parse(`ALTER DATABASE db SET OPTIONS(optimizer_version=3, version_retention_period='3d', enable_key_visualizer=true, a=1, b=2, optimizer_statistics_package='b');`), to); err != nil {
+		t.Fatal(err)
+	}
+	if actual := convertStrings(first); !slices.Equal(firstSQL, actual) {
+		t.Errorf("a later Diff modified an earlier result:%s", formatDDLMismatch(firstSQL, actual))
+	}
+	if actual := convertStrings(to); !slices.Equal(toSQL, actual) {
+		t.Errorf("Diff modified the target DDL:%s", formatDDLMismatch(toSQL, actual))
+	}
 }

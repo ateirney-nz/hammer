@@ -548,46 +548,29 @@ func (g *Generator) generateDDLForAlterDatabaseOptions() DDL {
 	if reflect.DeepEqual(optionsFrom, optionsTo) {
 		return ddl
 	}
-	if g.to.alterDatabaseOptions == nil {
-		ddl.Append(&ast.AlterDatabase{
-			Name: g.from.alterDatabaseOptions.Name,
-			Options: &ast.Options{
-				Records: []*ast.OptionsDef{
-					{
-						Name:  &ast.Ident{Name: "optimizer_version"},
-						Value: &ast.NullLiteral{},
-					},
-					{
-						Name:  &ast.Ident{Name: "version_retention_period"},
-						Value: &ast.NullLiteral{},
-					},
-					{
-						Name:  &ast.Ident{Name: "enable_key_visualizer"},
-						Value: &ast.NullLiteral{},
-					},
-				},
-			},
-		})
-		return ddl
+	alter := g.to.alterDatabaseOptions
+	if alter == nil {
+		alter = g.from.alterDatabaseOptions
 	}
-
-	dbopts := g.to.alterDatabaseOptions.Options
+	var records []*ast.OptionsDef
+	if g.to.alterDatabaseOptions != nil {
+		records = slices.Clone(alter.Options.Records)
+	}
 	if g.from.options != nil {
 		for _, r := range g.from.options.Records {
-			name := r.Name.Name
-			if _, ok := optionsTo[name]; ok {
+			if _, ok := optionsTo[r.Name.Name]; ok {
 				continue
 			}
-			dbopts.Records = append(dbopts.Records, &ast.OptionsDef{
-				Name:  &ast.Ident{Name: name},
+			records = append(records, &ast.OptionsDef{
+				Name:  &ast.Ident{Name: r.Name.Name},
 				Value: &ast.NullLiteral{},
 			})
 		}
 	}
 
 	ddl.Append(&ast.AlterDatabase{
-		Name:    g.to.alterDatabaseOptions.Name,
-		Options: dbopts,
+		Name:    alter.Name,
+		Options: &ast.Options{Records: records},
 	})
 	return ddl
 }

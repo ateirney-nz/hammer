@@ -100,6 +100,7 @@ var (
 		"TestDiffView/drop_view_before_table_it_references":                                                   "view uses SELECT *, which Spanner does not allow",
 		"TestDiffView/drop_view_before_column_it_references":                                                  "view column is not qualified by its table",
 		"TestDiffView/drop_views_in_reverse_definition_order":                                                 "view column is not qualified by its table",
+		"TestDiffView/create_a_view_after_the_view_it_selects_from":                                           "view is declared before the view it selects from",
 	}
 
 	// realKnownRoundTripFailures are known failures on real Spanner only.

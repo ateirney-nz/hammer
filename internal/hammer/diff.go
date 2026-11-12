@@ -425,8 +425,12 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 		ddl.AppendDDL(g.generateDDLForAlterChangeStream(fromChangeStream, cs))
 	}
 
-	// for views
-	for _, toView := range g.to.views {
+	// for views, after the views they select from
+	views, err := sortViewsByDependency(g.to.views)
+	if err != nil {
+		return DDL{}, err
+	}
+	for _, toView := range views {
 		fromView, exists := g.findViewByName(g.from.views, identsToComparable(toView.Name.Idents...))
 		if !exists {
 			ddl.Append(toView)
@@ -1792,6 +1796,50 @@ func (g *Generator) findViewByName(views []*View, name string) (*View, bool) {
 
 func (g *Generator) viewEqual(x, y *View) bool {
 	return x.SecurityType == y.SecurityType && x.Query.SQL() == y.Query.SQL()
+}
+
+func sortViewsByDependency(views []*View) ([]*View, error) {
+	byName := make(map[string]*View, len(views))
+	for _, v := range views {
+		byName[strings.ToLower(identsToComparable(v.Name.Idents...))] = v
+	}
+	const visiting, done = 1, 2
+	state := make(map[*View]int, len(views))
+	sorted := make([]*View, 0, len(views))
+	var visit func(v *View, path []string) error
+	visit = func(v *View, path []string) error {
+		name := identsToComparable(v.Name.Idents...)
+		switch state[v] {
+		case done:
+			return nil
+		case visiting:
+			return fmt.Errorf("views form a dependency cycle: %s", strings.Join(append(path, name), " -> "))
+		}
+		state[v] = visiting
+		for node := range ast.Preorder(v.Query) {
+			var ref string
+			switch n := node.(type) {
+			case *ast.TableName:
+				ref = n.Table.Name
+			case *ast.PathTableExpr:
+				ref = identsToComparable(n.Path.Idents...)
+			}
+			if dep, ok := byName[strings.ToLower(ref)]; ok {
+				if err := visit(dep, append(path, name)); err != nil {
+					return err
+				}
+			}
+		}
+		state[v] = done
+		sorted = append(sorted, v)
+		return nil
+	}
+	for _, v := range views {
+		if err := visit(v, nil); err != nil {
+			return nil, err
+		}
+	}
+	return sorted, nil
 }
 
 func (g *Generator) generateDDLForReplaceView(from, to *View) DDL {

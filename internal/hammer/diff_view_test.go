@@ -258,6 +258,44 @@ AS SELECT t1.t1_1 FROM t1;
 			},
 		},
 		{
+			name: "create a view after the view it selects from",
+			from: `
+CREATE TABLE t1 (
+	t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+	t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+
+CREATE VIEW v2
+SQL SECURITY INVOKER
+AS SELECT v1.t1_1 FROM v1;
+
+CREATE VIEW v1
+SQL SECURITY INVOKER
+AS SELECT t1.t1_1 FROM t1;
+`,
+			expected: []string{
+				`CREATE VIEW v1 SQL SECURITY INVOKER AS SELECT t1.t1_1 FROM t1`,
+				`CREATE VIEW v2 SQL SECURITY INVOKER AS SELECT v1.t1_1 FROM v1`,
+			},
+		},
+		{
+			name: "views that select from each other",
+			to: `
+CREATE VIEW v1
+SQL SECURITY INVOKER
+AS SELECT v2.c FROM v2;
+
+CREATE VIEW v2
+SQL SECURITY INVOKER
+AS SELECT v1.c FROM v1;
+`,
+			wantErr: "views form a dependency cycle: v1 -> v2 -> v1",
+		},
+		{
 			name: "drop views in reverse definition order",
 			from: `
 CREATE TABLE t1 (

@@ -232,6 +232,39 @@ CREATE TABLE t1 (
 			},
 		},
 		{
+			name: "add column (not null UUID)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 UUID NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{
+				`ALTER TABLE t1 ADD COLUMN t1_2 UUID NOT NULL DEFAULT (CAST("00000000-0000-0000-0000-000000000000" AS UUID))`,
+				`ALTER TABLE t1 ALTER COLUMN t1_2 DROP DEFAULT`,
+			},
+		},
+		{
+			name: "add column (not null proto without default)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 pkg.Message NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			wantErr: "needs an explicit DEFAULT",
+		},
+		{
 			name: "add column (not null)",
 			from: `
 CREATE TABLE t1 (
@@ -457,6 +490,41 @@ CREATE TABLE t1 (
 				`UPDATE t1 SET t1_2 = "" WHERE t1_2 IS NULL`,
 				`ALTER TABLE t1 ALTER COLUMN t1_2 STRING(MAX) NOT NULL`,
 			},
+		},
+		{
+			name: "set NOT NULL to UUID column",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 UUID,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 UUID NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{
+				`UPDATE t1 SET t1_2 = CAST("00000000-0000-0000-0000-000000000000" AS UUID) WHERE t1_2 IS NULL`,
+				`ALTER TABLE t1 ALTER COLUMN t1_2 UUID NOT NULL`,
+			},
+		},
+		{
+			name: "set NOT NULL to proto column without default",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 pkg.Message,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 pkg.Message NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			wantErr: "setting NOT NULL on column t1.t1_2: type pkg.Message needs an explicit DEFAULT",
 		},
 		{
 			name: "set DEFAULT",

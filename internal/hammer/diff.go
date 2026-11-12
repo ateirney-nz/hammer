@@ -28,7 +28,7 @@ func Diff(ddl1, ddl2 DDL) (DDL, error) {
 		to:                        database2,
 		alteredChangeStreamStates: map[string]*ChangeStream{},
 	}
-	return generator.GenerateDDL(), nil
+	return generator.GenerateDDL()
 }
 
 func NewDatabase(ddl DDL) (*Database, error) {
@@ -309,7 +309,7 @@ type Generator struct {
 	alteredChangeStreamStates      map[string]*ChangeStream
 }
 
-func (g *Generator) GenerateDDL() DDL {
+func (g *Generator) GenerateDDL() (DDL, error) {
 	ddl := DDL{}
 
 	// for alter database
@@ -368,7 +368,11 @@ func (g *Generator) GenerateDDL() DDL {
 		}
 
 		ddl.AppendDDL(g.generateDDLForDropIndex(fromTable, toTable))
-		ddl.AppendDDL(g.generateDDLForColumns(fromTable, toTable))
+		columns, err := g.generateDDLForColumns(fromTable, toTable)
+		if err != nil {
+			return DDL{}, err
+		}
+		ddl.AppendDDL(columns)
 		ddl.AppendDDL(g.generateDDLForCreateIndex(fromTable, toTable))
 		ddl.AppendDDL(g.generateDDLForAlterIndex(fromTable, toTable))
 		constraintTargets = append(constraintTargets, toTable)
@@ -524,7 +528,7 @@ func (g *Generator) GenerateDDL() DDL {
 		}
 	}
 
-	return ddl
+	return ddl, nil
 }
 
 func (g *Generator) generateDDLForAlterDatabaseOptions() DDL {
@@ -792,14 +796,18 @@ func (g *Generator) rowDeletionPolicyAlteration(from, to *ast.CreateRowDeletionP
 	return nil
 }
 
-func (g *Generator) generateDDLForColumns(from, to *Table) DDL {
+func (g *Generator) generateDDLForColumns(from, to *Table) (DDL, error) {
 	ddl := DDL{}
 
 	for _, toCol := range to.Columns {
 		fromCol, exists := g.findColumnByName(from.Columns, identsToComparable(toCol.Name))
 
 		if !exists {
-			ddl.AppendDDL(g.generateDDLForAddColumn(to.Name, toCol))
+			add, err := g.generateDDLForAddColumn(to.Name, toCol)
+			if err != nil {
+				return DDL{}, err
+			}
+			ddl.AppendDDL(add)
 			continue
 		}
 
@@ -813,7 +821,11 @@ func (g *Generator) generateDDLForColumns(from, to *Table) DDL {
 		}
 
 		if !g.columnTypeEqual(fromCol, toCol) || requireDropAndCreateByDefault(fromCol.DefaultSemantics) || requireDropAndCreateByDefault(toCol.DefaultSemantics) {
-			ddl.AppendDDL(g.generateDDLForDropAndCreateColumn(from, to, fromCol, toCol))
+			recreate, err := g.generateDDLForDropAndCreateColumn(from, to, fromCol, toCol)
+			if err != nil {
+				return DDL{}, err
+			}
+			ddl.AppendDDL(recreate)
 			continue
 		}
 
@@ -825,6 +837,11 @@ func (g *Generator) generateDDLForColumns(from, to *Table) DDL {
 				ddl.AppendDDL(g.generateDDLForDropForeignKeysReferencingColumn(to.Name, toCol.Name))
 			}
 			if !fromCol.NotNull && toCol.NotNull {
+				if toCol.DefaultSemantics == nil {
+					if _, err := withZeroDefault(toCol); err != nil {
+						return DDL{}, fmt.Errorf("setting NOT NULL on column %s.%s: %w", to.Name.SQL(), toCol.Name.SQL(), err)
+					}
+				}
 				ddl.Append(Update{Table: to.Name.SQL(), Def: toCol})
 			}
 			ddl.Append(AlterColumn{Table: to.Name.SQL(), Def: toCol})
@@ -838,7 +855,7 @@ func (g *Generator) generateDDLForColumns(from, to *Table) DDL {
 			ddl.AppendDDL(g.generateDDLForDropColumn(from.Name, fromCol.Name))
 		}
 	}
-	return ddl
+	return ddl, nil
 }
 
 func requireDropAndCreateByDefault(d ast.ColumnDefaultSemantics) bool {
@@ -846,17 +863,21 @@ func requireDropAndCreateByDefault(d ast.ColumnDefaultSemantics) bool {
 	return d != nil && !isExpr
 }
 
-func (g *Generator) generateDDLForAddColumn(table *ast.Path, col *ast.ColumnDef) DDL {
+func (g *Generator) generateDDLForAddColumn(table *ast.Path, col *ast.ColumnDef) (DDL, error) {
 	ddl := DDL{}
 
 	if !col.NotNull || col.DefaultSemantics != nil {
 		ddl.Append(&ast.AlterTable{Name: table, TableAlteration: &ast.AddColumn{Column: col}})
-		return ddl
+		return ddl, nil
 	}
 	// A NOT NULL column needs a default to fill existing rows.
-	ddl.Append(&ast.AlterTable{Name: table, TableAlteration: &ast.AddColumn{Column: withZeroDefault(col)}})
+	withDefault, err := withZeroDefault(col)
+	if err != nil {
+		return DDL{}, fmt.Errorf("adding NOT NULL column %s.%s: %w", table.SQL(), col.Name.SQL(), err)
+	}
+	ddl.Append(&ast.AlterTable{Name: table, TableAlteration: &ast.AddColumn{Column: withDefault}})
 	ddl.Append(&ast.AlterTable{Name: table, TableAlteration: &ast.AlterColumn{Name: col.Name, Alteration: &ast.AlterColumnDropDefault{}}})
-	return ddl
+	return ddl, nil
 }
 
 func (g *Generator) generateDDLForDropForeignKeysReferencingColumn(table *ast.Path, column *ast.Ident) DDL {
@@ -898,7 +919,7 @@ func (g *Generator) generateDDLForDropColumn(table *ast.Path, column *ast.Ident)
 	return ddl
 }
 
-func (g *Generator) generateDDLForDropAndCreateColumn(from, to *Table, fromCol, toCol *ast.ColumnDef) DDL {
+func (g *Generator) generateDDLForDropAndCreateColumn(from, to *Table, fromCol, toCol *ast.ColumnDef) (DDL, error) {
 	ddl := DDL{}
 
 	indexes := []*ast.CreateIndex{}
@@ -923,14 +944,18 @@ func (g *Generator) generateDDLForDropAndCreateColumn(from, to *Table, fromCol, 
 
 	ddl.AppendDDL(g.generateDDLForDropColumn(from.Name, fromCol.Name))
 
-	ddl.AppendDDL(g.generateDDLForAddColumn(to.Name, toCol))
+	add, err := g.generateDDLForAddColumn(to.Name, toCol)
+	if err != nil {
+		return DDL{}, err
+	}
+	ddl.AppendDDL(add)
 	for _, i := range indexes {
 		ddl.Append(i)
 	}
 	for _, i := range searchIndexes {
 		ddl.Append(i)
 	}
-	return ddl
+	return ddl, nil
 }
 
 func (g *Generator) generateDDLForDropIndex(from, to *Table) DDL {
@@ -1340,7 +1365,15 @@ func identsToComparable(is ...*ast.Ident) string {
 	return b.String()
 }
 
-func withZeroDefault(col *ast.ColumnDef) *ast.ColumnDef {
+func isUUID(t *ast.NamedType) bool {
+	return len(t.Path) == 1 && strings.EqualFold(t.Path[0].Name, "UUID")
+}
+
+func zeroUUID(t *ast.NamedType) ast.Expr {
+	return &ast.CastExpr{Expr: &ast.StringLiteral{Value: "00000000-0000-0000-0000-000000000000"}, Type: t}
+}
+
+func withZeroDefault(col *ast.ColumnDef) (*ast.ColumnDef, error) {
 	c := *col
 	switch t := col.Type.(type) {
 	case *ast.ArraySchemaType:
@@ -1350,9 +1383,12 @@ func withZeroDefault(col *ast.ColumnDef) *ast.ColumnDef {
 	case *ast.SizedSchemaType:
 		c.DefaultSemantics = &ast.ColumnDefaultExpr{Expr: defaultByScalarTypeName(t.Name)}
 	case *ast.NamedType:
-		panic("not implemented")
+		if !isUUID(t) {
+			return nil, fmt.Errorf("type %s needs an explicit DEFAULT", t.SQL())
+		}
+		c.DefaultSemantics = &ast.ColumnDefaultExpr{Expr: zeroUUID(t)}
 	}
-	return &c
+	return &c, nil
 }
 
 func findFirst[T any](items []T, match func(T) bool) (T, bool) {

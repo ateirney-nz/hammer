@@ -127,6 +127,11 @@ func (u Update) defaultValue() string {
 		return defaultByScalarTypeName(t.Name).SQL()
 	case *ast.SizedSchemaType:
 		return defaultByScalarTypeName(t.Name).SQL()
+	case *ast.NamedType:
+		if isUUID(t) {
+			return zeroUUID(t).SQL()
+		}
+		return "''"
 	default:
 		return "''"
 	}

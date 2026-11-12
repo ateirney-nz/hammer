@@ -123,6 +123,7 @@ var (
 		"TestDiffFunction/create_function_before_the_check_constraint_that_calls_it":                                 "the emulator rejects a function in a CHECK constraint",
 		"TestDiffFunction/drop_function_after_the_check_constraint_that_called_it":                                   "the emulator rejects a function in a CHECK constraint",
 		"TestDiffCheckConstraint/recreating_a_column_does_not_re-add_a_same-named_check_constraint_on_another_table": "two constraints share a name",
+		"TestDiffModel/change_the_options_of_a_model_without_INPUT_and_OUTPUT":                                       "the emulator has no schema discovery for a model without INPUT and OUTPUT",
 		"TestDiffChangeStream/change_stream_OPTIONS_value_change_is_still_detected":                                  "change stream retention period is out of range",
 		"TestDiffAlterDatabase/remove_one_option_and_keep_another":                                                   "the emulator does not support this database option",
 		"TestDiffAlterDatabase/whitespace-only_difference_is_no-op":                                                  "the emulator does not support this database option",

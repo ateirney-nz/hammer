@@ -41,6 +41,7 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		functions            []*Function
 		queues               []*Queue
 		sequences            []*Sequence
+		models               []*Model
 		roles                []*Role
 		grants               []*Grant
 		alterDatabaseOptions *ast.AlterDatabase
@@ -107,6 +108,8 @@ func NewDatabase(ddl DDL) (*Database, error) {
 			queues = append(queues, &Queue{CreateQueue: stmt})
 		case *ast.CreateSequence:
 			sequences = append(sequences, &Sequence{CreateSequence: stmt})
+		case *ast.CreateModel:
+			models = append(models, &Model{CreateModel: stmt})
 		case *ast.CreateRole:
 			roles = append(roles, &Role{CreateRole: stmt})
 		case *ast.Grant:
@@ -142,6 +145,7 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		functions:            functions,
 		queues:               queues,
 		sequences:            sequences,
+		models:               models,
 		roles:                roles,
 		grants:               grants,
 		alterDatabaseOptions: alterDatabaseOptions,
@@ -157,6 +161,7 @@ type Database struct {
 	functions            []*Function
 	queues               []*Queue
 	sequences            []*Sequence
+	models               []*Model
 	roles                []*Role
 	grants               []*Grant
 	alterDatabaseOptions *ast.AlterDatabase
@@ -275,6 +280,10 @@ type Sequence struct {
 	*ast.CreateSequence
 }
 
+type Model struct {
+	*ast.CreateModel
+}
+
 type Role struct {
 	*ast.CreateRole
 }
@@ -355,9 +364,10 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 	if err != nil {
 		return DDL{}, err
 	}
-	// Spanner rejects replacing a function's signature under the functions and views that call it:
-	// drop them first, recreate them below.
+	// Spanner rejects replacing a function's signature under the functions and views that call it, and
+	// the same holds for a model's columns: drop them first, recreate them below.
 	changed, signature := g.changedFunctions()
+	maps.Copy(signature, g.replacedModels())
 	recreatedFunctions, recreatedViews, err := g.callersOfChangedSignatures(signature)
 	if err != nil {
 		return DDL{}, err
@@ -378,6 +388,16 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 	for _, f := range slices.Backward(recreatedFunctions) {
 		ddl.Append(&ast.DropFunction{Name: f.Name})
 	}
+	// create or alter models before the views that call ML.PREDICT on them
+	for _, toModel := range g.to.models {
+		fromModel, exists := g.findModelByName(g.from.models, toModel.Name.Name)
+		if !exists {
+			ddl.Append(toModel)
+			continue
+		}
+		ddl.AppendDDL(g.generateDDLForAlterModel(fromModel, toModel))
+	}
+
 	for _, toFunction := range functions {
 		fromFunction, exists := g.findFunctionByName(g.from.functions, toFunction.Name)
 		replace := exists && !recreatedFunction[functionKey(toFunction.Name)]
@@ -556,6 +576,13 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 	for _, fromFunction := range slices.Backward(droppedFunctions) {
 		if _, exists := g.findFunctionByName(g.to.functions, fromFunction.Name); !exists && !recreatedFunction[functionKey(fromFunction.Name)] {
 			ddl.Append(&ast.DropFunction{Name: fromFunction.Name})
+		}
+	}
+
+	// drop models after the views that call ML.PREDICT on them have been dropped
+	for _, fromModel := range g.from.models {
+		if _, exists := g.findModelByName(g.to.models, fromModel.Name.Name); !exists {
+			ddl.Append(&ast.DropModel{Name: fromModel.Name})
 		}
 	}
 
@@ -2084,6 +2111,62 @@ func (g *Generator) generateDDLForAlterSequence(from, to *Sequence) DDL {
 	return ddl
 }
 
+func (g *Generator) findModelByName(models []*Model, name string) (*Model, bool) {
+	return findFirst(models, func(m *Model) bool { return strings.EqualFold(m.Name.Name, name) })
+}
+
+// generateDDLForAlterModel replaces the model when its columns change; Spanner's ALTER MODEL only sets options.
+func (g *Generator) generateDDLForAlterModel(from, to *Model) DDL {
+	ddl := DDL{}
+	if modelColumnsChanged(from, to) {
+		ddl.Append(&ast.CreateModel{OrReplace: true, Name: to.Name, InputOutput: to.InputOutput, Options: to.Options})
+		return ddl
+	}
+
+	fromOptions, toOptions := g.optionsToMap(from.Options), g.optionsToMap(to.Options)
+	var records []*ast.OptionsDef
+	if to.Options != nil {
+		for _, def := range to.Options.Records {
+			if value, ok := toOptions[def.Name.Name]; ok && value != fromOptions[def.Name.Name] {
+				records = append(records, def)
+			}
+		}
+	}
+	if from.Options != nil {
+		for _, def := range from.Options.Records {
+			if _, ok := toOptions[def.Name.Name]; !ok && fromOptions[def.Name.Name] != "" {
+				records = append(records, &ast.OptionsDef{Name: def.Name, Value: &ast.NullLiteral{}})
+			}
+		}
+	}
+	if len(records) > 0 {
+		ddl.Append(&ast.AlterModel{Name: to.Name, Options: &ast.Options{Records: records}})
+	}
+	return ddl
+}
+
+// replacedModels returns the keys, as refersToAny matches them, of the models that CREATE OR REPLACE changes.
+func (g *Generator) replacedModels() map[string]bool {
+	replaced := map[string]bool{}
+	for _, to := range g.to.models {
+		if from, ok := g.findModelByName(g.from.models, to.Name.Name); ok && modelColumnsChanged(from, to) {
+			replaced[modelKey(to.Name.Name)] = true
+		}
+	}
+	return replaced
+}
+
+func modelKey(name string) string { return "model:" + strings.ToLower(name) }
+
+func modelColumnsChanged(from, to *Model) bool { return inputOutputSQL(from) != inputOutputSQL(to) }
+
+func inputOutputSQL(m *Model) string {
+	if m.InputOutput == nil {
+		return ""
+	}
+	return m.InputOutput.SQL()
+}
+
 func (g *Generator) findSchemaByName(schemas []*Schema, name string) (*Schema, bool) {
 	return findFirst(schemas, func(s *Schema) bool {
 		return identsToComparable(s.Name) == name
@@ -2215,6 +2298,8 @@ func refersToAny(n ast.Node, names map[string]bool) bool {
 			if names[functionKey(n.Func)] {
 				return true
 			}
+		case *ast.ModelArg:
+			ref = modelKey(n.Name.Idents[len(n.Name.Idents)-1].Name)
 		case *ast.TableName:
 			ref = n.Table.Name
 		case *ast.PathTableExpr:

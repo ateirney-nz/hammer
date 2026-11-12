@@ -3,6 +3,7 @@ package hammer
 import (
 	stdcmp "cmp"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -37,6 +38,7 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		tables               []*Table
 		changeStreams        []*ChangeStream
 		views                []*View
+		functions            []*Function
 		queues               []*Queue
 		sequences            []*Sequence
 		roles                []*Role
@@ -93,6 +95,8 @@ func NewDatabase(ddl DDL) (*Database, error) {
 			}
 		case *ast.CreateView:
 			views = append(views, &View{CreateView: stmt})
+		case *ast.CreateFunction:
+			functions = append(functions, &Function{CreateFunction: stmt})
 		case *ast.CreateQueue:
 			queues = append(queues, &Queue{CreateQueue: stmt})
 		case *ast.CreateSequence:
@@ -129,6 +133,7 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		tables:               tables,
 		changeStreams:        changeStreams,
 		views:                views,
+		functions:            functions,
 		queues:               queues,
 		sequences:            sequences,
 		roles:                roles,
@@ -143,6 +148,7 @@ type Database struct {
 	tables               []*Table
 	changeStreams        []*ChangeStream
 	views                []*View
+	functions            []*Function
 	queues               []*Queue
 	sequences            []*Sequence
 	roles                []*Role
@@ -254,6 +260,10 @@ type View struct {
 	*ast.CreateView
 }
 
+type Function struct {
+	*ast.CreateFunction
+}
+
 type Sequence struct {
 	*ast.CreateSequence
 }
@@ -333,10 +343,51 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 		ddl.AppendDDL(g.generateDDLForAlterSequence(fromSequence, toSequence))
 	}
 
+	// create or replace functions before the views and functions that call them
+	functions, err := sortFunctionsByDependency(g.to.functions)
+	if err != nil {
+		return DDL{}, err
+	}
+	// Spanner rejects replacing a function's signature under the functions and views that call it:
+	// drop them first, recreate them below.
+	changed, signature := g.changedFunctions()
+	recreatedFunctions, recreatedViews, err := g.callersOfChangedSignatures(signature)
+	if err != nil {
+		return DDL{}, err
+	}
+	recreatedFunction, recreatedView := map[string]bool{}, map[string]bool{}
+	for _, f := range recreatedFunctions {
+		recreatedFunction[functionKey(f.Name)] = true
+	}
+	for _, v := range recreatedViews {
+		recreatedView[lowerName(v.Name)] = true
+	}
+	if err := g.rejectTablesUsingFunctions(changed, signature, recreatedFunction); err != nil {
+		return DDL{}, err
+	}
+	for _, v := range slices.Backward(recreatedViews) {
+		ddl.AppendDDL(g.generateDDLForDropView(v))
+	}
+	for _, f := range slices.Backward(recreatedFunctions) {
+		ddl.Append(&ast.DropFunction{Name: f.Name})
+	}
+	for _, toFunction := range functions {
+		fromFunction, exists := g.findFunctionByName(g.from.functions, toFunction.Name)
+		replace := exists && !recreatedFunction[functionKey(toFunction.Name)]
+		if exists && g.functionEqual(fromFunction, toFunction) && replace {
+			continue
+		}
+		ddl.Append(&ast.CreateFunction{
+			OrReplace: replace, Name: toFunction.Name, Params: toFunction.Params, ReturnType: toFunction.ReturnType,
+			SqlSecurity: toFunction.SqlSecurity, Determinism: toFunction.Determinism, Language: toFunction.Language,
+			Remote: toFunction.Remote, Options: toFunction.Options, Definition: toFunction.Definition,
+		})
+	}
+
 	// drop views before any table or column they may reference is dropped
 	for i := len(g.from.views) - 1; i >= 0; i-- {
 		fromView := g.from.views[i]
-		if _, exists := g.findViewByName(g.to.views, identsToComparable(fromView.Name.Idents...)); !exists {
+		if _, exists := g.findViewByName(g.to.views, identsToComparable(fromView.Name.Idents...)); !exists && !recreatedView[lowerName(fromView.Name)] {
 			ddl.AppendDDL(g.generateDDLForDropView(fromView))
 		}
 	}
@@ -432,7 +483,7 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 	}
 	for _, toView := range views {
 		fromView, exists := g.findViewByName(g.from.views, identsToComparable(toView.Name.Idents...))
-		if !exists {
+		if !exists || recreatedView[lowerName(toView.Name)] {
 			ddl.Append(toView)
 			continue
 		}
@@ -485,6 +536,17 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 	for _, fromTable := range g.from.tables {
 		if _, exists := g.findTableByName(g.to.tables, identsToComparable(fromTable.Name.Idents...)); !exists {
 			ddl.AppendDDL(g.generateDDLForDropConstraintIndexAndTable(fromTable))
+		}
+	}
+
+	// drop functions after the views and functions that call them have been dropped or replaced
+	droppedFunctions, err := sortFunctionsByDependency(g.from.functions)
+	if err != nil {
+		return DDL{}, err
+	}
+	for _, fromFunction := range slices.Backward(droppedFunctions) {
+		if _, exists := g.findFunctionByName(g.to.functions, fromFunction.Name); !exists && !recreatedFunction[functionKey(fromFunction.Name)] {
+			ddl.Append(&ast.DropFunction{Name: fromFunction.Name})
 		}
 	}
 
@@ -1902,6 +1964,195 @@ func sortViewsByDependency(views []*View) ([]*View, error) {
 	}
 	for _, v := range views {
 		if err := visit(v, nil); err != nil {
+			return nil, err
+		}
+	}
+	return sorted, nil
+}
+
+func (g *Generator) findFunctionByName(functions []*Function, name *ast.Path) (*Function, bool) {
+	return findFirst(functions, func(f *Function) bool { return functionKey(f.Name) == functionKey(name) })
+}
+
+// functionKey keeps the schema case-sensitive and folds the function name, as Spanner does.
+func functionKey(p *ast.Path) string {
+	last := len(p.Idents) - 1
+	return identsToComparable(p.Idents[:last]...) + "." + strings.ToLower(p.Idents[last].Name)
+}
+
+func lowerName(p *ast.Path) string {
+	return strings.ToLower(identsToComparable(p.Idents...))
+}
+
+// changedFunctions returns the functions that exist on both sides with a different definition, and the
+// subset whose arguments or return type change. Without RETURNS the type is inferred from the body, so any change counts.
+func (g *Generator) changedFunctions() (changed, signature map[string]bool) {
+	changed, signature = map[string]bool{}, map[string]bool{}
+	for _, to := range g.to.functions {
+		from, ok := g.findFunctionByName(g.from.functions, to.Name)
+		if !ok || g.functionEqual(from, to) {
+			continue
+		}
+		changed[functionKey(to.Name)] = true
+		if from.ReturnType == nil || to.ReturnType == nil || g.functionSignature(from) != g.functionSignature(to) {
+			signature[functionKey(to.Name)] = true
+		}
+	}
+	return changed, signature
+}
+
+// callersOfChangedSignatures returns the current functions and views that call a function whose signature
+// changes, or that select from such a view, each dependencies first.
+func (g *Generator) callersOfChangedSignatures(signature map[string]bool) ([]*Function, []*View, error) {
+	if len(signature) == 0 {
+		return nil, nil, nil
+	}
+	names := maps.Clone(signature)
+	sortedFunctions, err := sortFunctionsByDependency(g.from.functions)
+	if err != nil {
+		return nil, nil, err
+	}
+	var functions []*Function
+	for _, f := range sortedFunctions {
+		if f.Definition != nil && refersToAny(f.Definition, names) {
+			names[functionKey(f.Name)] = true
+			functions = append(functions, f)
+		}
+	}
+	sortedViews, err := sortViewsByDependency(g.from.views)
+	if err != nil {
+		return nil, nil, err
+	}
+	var views []*View
+	for _, v := range sortedViews {
+		if refersToAny(v.Query, names) {
+			names[lowerName(v.Name)] = true
+			views = append(views, v)
+		}
+	}
+	return functions, views, nil
+}
+
+func refersToAny(n ast.Node, names map[string]bool) bool {
+	for node := range ast.Preorder(n) {
+		var ref string
+		switch n := node.(type) {
+		case *ast.CallExpr:
+			if names[functionKey(n.Func)] {
+				return true
+			}
+		case *ast.TableName:
+			ref = n.Table.Name
+		case *ast.PathTableExpr:
+			ref = identsToComparable(n.Path.Idents...)
+		}
+		if names[strings.ToLower(ref)] {
+			return true
+		}
+	}
+	return false
+}
+
+// rejectTablesUsingFunctions fails when a column default, generated column or CHECK constraint calls a function
+// that Spanner will not let the diff change: any change under a generated column or CHECK, a signature
+// change (or recreation) under a default.
+func (g *Generator) rejectTablesUsingFunctions(changed, signature, recreated map[string]bool) error {
+	anyChange, signatureChange := maps.Clone(changed), maps.Clone(signature)
+	maps.Copy(anyChange, recreated)
+	maps.Copy(signatureChange, recreated)
+	if len(anyChange) == 0 {
+		return nil
+	}
+	fail := func(names map[string]bool, expr ast.Expr, user string) error {
+		for node := range ast.Preorder(expr) {
+			if call, ok := node.(*ast.CallExpr); ok && names[functionKey(call.Func)] {
+				return fmt.Errorf("cannot change function %s: %s calls it", call.Func.SQL(), user)
+			}
+		}
+		return nil
+	}
+	for _, t := range g.from.tables {
+		table := t.Name.SQL()
+		for _, col := range t.Columns {
+			var err error
+			switch d := col.DefaultSemantics.(type) {
+			case *ast.GeneratedColumnExpr:
+				err = fail(anyChange, d.Expr, "generated column "+table+"."+col.Name.SQL())
+			case *ast.ColumnDefaultExpr:
+				err = fail(signatureChange, d.Expr, "the default of column "+table+"."+col.Name.SQL())
+				if err != nil {
+					err = fmt.Errorf("%w; if that column or its table is dropped in the same diff, split the change into two migrations", err)
+				}
+			}
+			if err != nil {
+				return err
+			}
+		}
+		for _, c := range t.TableConstraints {
+			if check, ok := c.Constraint.(*ast.Check); ok {
+				if err := fail(anyChange, check.Expr, "a CHECK constraint on table "+table); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (g *Generator) functionSignature(f *Function) string {
+	var b strings.Builder
+	for _, p := range f.Params {
+		b.WriteString(p.SQL() + ",")
+	}
+	if f.ReturnType != nil {
+		b.WriteString(f.ReturnType.SQL())
+	}
+	return b.String()
+}
+
+func (g *Generator) functionEqual(x, y *Function) bool {
+	a, b := *x.CreateFunction, *y.CreateFunction
+	a.OrReplace, b.OrReplace, b.Name = false, false, a.Name
+	return a.SQL() == b.SQL()
+}
+
+func sortFunctionsByDependency(functions []*Function) ([]*Function, error) {
+	byName := make(map[string]*Function, len(functions))
+	for _, f := range functions {
+		byName[functionKey(f.Name)] = f
+	}
+	const visiting, done = 1, 2
+	state := make(map[*Function]int, len(functions))
+	sorted := make([]*Function, 0, len(functions))
+	var visit func(f *Function, path []string) error
+	visit = func(f *Function, path []string) error {
+		name := identsToComparable(f.Name.Idents...)
+		switch state[f] {
+		case done:
+			return nil
+		case visiting:
+			return fmt.Errorf("functions form a dependency cycle: %s", strings.Join(append(path, name), " -> "))
+		}
+		state[f] = visiting
+		if f.Definition != nil {
+			for node := range ast.Preorder(f.Definition) {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					continue
+				}
+				if dep, ok := byName[functionKey(call.Func)]; ok {
+					if err := visit(dep, append(path, name)); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		state[f] = done
+		sorted = append(sorted, f)
+		return nil
+	}
+	for _, f := range functions {
+		if err := visit(f, nil); err != nil {
 			return nil, err
 		}
 	}

@@ -41,6 +41,8 @@ var (
 		"TestDiffCheckConstraint/unnamed_check_constraint_is_not_dropped_when_recreating_the_column_it_references/round_trip/reverse": "Spanner rejects dropping a column an unnamed CHECK constraint references",
 		"TestDiffCheckConstraint/re-add_check_constraint_when_the_table_name_differs_only_in_case/round_trip/forward":                 "hammer writes the target's case of the table name, but Spanner DDL names are case-sensitive",
 		"TestDiffCheckConstraint/re-add_check_constraint_when_the_table_name_differs_only_in_case/round_trip/reverse":                 "hammer writes the target's case of the table name, but Spanner DDL names are case-sensitive",
+		"TestDiffColumn/change_column_(STRING_to_BYTES_used_by_generated_column_stays_drop_and_add)/round_trip/forward":               "Spanner rejects dropping a column a generated column references",
+		"TestDiffColumn/change_column_(STRING_to_BYTES_used_by_generated_column_stays_drop_and_add)/round_trip/reverse":               "Spanner rejects dropping a column a generated column references",
 	}
 
 	// emulatorKnownRoundTripFailures are known failures on the emulator only.

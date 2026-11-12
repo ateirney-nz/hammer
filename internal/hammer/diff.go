@@ -811,7 +811,7 @@ func (g *Generator) generateDDLForColumns(from, to *Table) (DDL, error) {
 			continue
 		}
 
-		if !g.columnTypeEqual(fromCol, toCol) || requireDropAndCreateByDefault(fromCol.DefaultSemantics) || requireDropAndCreateByDefault(toCol.DefaultSemantics) {
+		if !g.columnTypeAlterable(from, fromCol, toCol) || requireDropAndCreateByDefault(fromCol.DefaultSemantics) || requireDropAndCreateByDefault(toCol.DefaultSemantics) {
 			recreate, err := g.generateDDLForDropAndCreateColumn(from, to, fromCol, toCol)
 			if err != nil {
 				return DDL{}, err
@@ -879,6 +879,57 @@ func (g *Generator) isReferencedByViewOrChangeStream(column *ast.Ident) bool {
 	return slices.ContainsFunc(changeStreams, func(cs *ChangeStream) bool {
 		return cs.For != nil && mentions(cs.For)
 	})
+}
+
+// columnTypeAlterable reports whether the column can change type in place. A column used by a
+// foreign key, check constraint or generated column is recreated instead, as Spanner refuses to retype it.
+func (g *Generator) columnTypeAlterable(table *Table, from, to *ast.ColumnDef) bool {
+	if g.columnTypeEqual(from, to) {
+		return true
+	}
+	// The backfill for a new NOT NULL would write a value of the target type into a column of the old type.
+	if !alterableTypeChange(from.Type, to.Type) || !from.NotNull && to.NotNull {
+		return false
+	}
+	for _, c := range table.Columns {
+		if gen, ok := c.DefaultSemantics.(*ast.GeneratedColumnExpr); ok && exprReferencesColumn(gen.Expr, from.Name) {
+			return false
+		}
+	}
+	for _, t := range g.from.tables {
+		for _, c := range t.TableConstraints {
+			if foreignKeyReferencesColumn(t, table.Name, from.Name, c) || checkReferencesColumn(t, table.Name, from.Name, c) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// alterableTypeChange reports whether Spanner converts from to to in place with ALTER COLUMN.
+// PROTO and ENUM changes are left out: the schema syntax cannot tell them apart, so an ALTER may be rejected.
+// https://cloud.google.com/spanner/docs/schema-updates#supported-updates
+func alterableTypeChange(from, to ast.SchemaType) bool {
+	if fromArray, ok := from.(*ast.ArraySchemaType); ok {
+		toArray, ok := to.(*ast.ArraySchemaType)
+		return ok && alterableTypeChange(fromArray.Item, toArray.Item)
+	}
+	return alterableTypeKinds[[2]string{typeKind(from), typeKind(to)}]
+}
+
+var alterableTypeKinds = map[[2]string]bool{
+	{"STRING", "BYTES"}: true,
+	{"BYTES", "STRING"}: true,
+}
+
+func typeKind(t ast.SchemaType) string {
+	switch t := t.(type) {
+	case *ast.ScalarSchemaType:
+		return string(t.Name)
+	case *ast.SizedSchemaType:
+		return string(t.Name)
+	}
+	return fmt.Sprintf("%T", t)
 }
 
 func requireDropAndCreateByDefault(d ast.ColumnDefaultSemantics) bool {
@@ -1536,8 +1587,12 @@ func checkReferencesColumn(constraintHost *Table, tableName *ast.Path, column *a
 	if !ok || identsToComparable(constraintHost.Name.Idents...) != identsToComparable(tableName.Idents...) {
 		return false
 	}
+	return exprReferencesColumn(check.Expr, column)
+}
+
+func exprReferencesColumn(expr ast.Expr, column *ast.Ident) bool {
 	// Any identifier with the column's name counts, so a function or field name may cause a needless re-add but never a missed one.
-	for node := range ast.Preorder(check.Expr) {
+	for node := range ast.Preorder(expr) {
 		if id, ok := node.(*ast.Ident); ok && strings.EqualFold(id.Name, column.Name) {
 			return true
 		}

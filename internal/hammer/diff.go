@@ -369,6 +369,7 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 		}
 
 		ddl.AppendDDL(g.generateDDLForDropIndex(fromTable, toTable))
+		ddl.AppendDDL(g.generateDDLForDropStoredColumn(fromTable, toTable))
 		columns, err := g.generateDDLForColumns(fromTable, toTable)
 		if err != nil {
 			return DDL{}, err
@@ -1032,12 +1033,30 @@ func (g *Generator) generateDDLForDropAndCreateColumn(from, to *Table, fromCol, 
 	}
 	ddl.AppendDDL(add)
 	for _, i := range indexes {
-		ddl.Append(i)
+		recreated := *i
+		recreated.Storing = g.storingKeptIn(i.Storing, to)
+		ddl.Append(&recreated)
 	}
 	for _, i := range searchIndexes {
 		ddl.Append(i)
 	}
 	return ddl, nil
+}
+
+// storingKeptIn drops the stored columns the target table no longer has, which Spanner would
+// otherwise refuse to drop while the recreated index still stores them.
+func (g *Generator) storingKeptIn(storing *ast.Storing, to *Table) *ast.Storing {
+	if storing == nil {
+		return nil
+	}
+	columns := slices.DeleteFunc(slices.Clone(storing.Columns), func(c *ast.Ident) bool {
+		_, kept := g.findColumnByName(to.Columns, identsToComparable(c))
+		return !kept
+	})
+	if len(columns) == 0 {
+		return nil
+	}
+	return &ast.Storing{Columns: columns}
 }
 
 func (g *Generator) generateDDLForDropIndex(from, to *Table) DDL {
@@ -1098,6 +1117,26 @@ func (g *Generator) generateDDLForCreateIndex(from, to *Table) DDL {
 	return ddl
 }
 
+// generateDDLForDropStoredColumn drops stored columns whose table column is dropped; Spanner
+// rejects dropping a column that an index still stores.
+func (g *Generator) generateDDLForDropStoredColumn(from, to *Table) DDL {
+	ddl := DDL{}
+
+	for _, fromIndex := range from.indexes {
+		toIndex, exists := g.findIndexByName(to.indexes, identsToComparable(fromIndex.Name.Idents...))
+		if !exists || !g.indexEqualIgnoringStoring(fromIndex, toIndex) || fromIndex.Storing == nil {
+			continue
+		}
+		for _, c := range fromIndex.Storing.Columns {
+			if _, kept := g.findColumnByName(to.Columns, identsToComparable(c)); !kept {
+				ddl.Append(&ast.AlterIndex{Name: toIndex.Name, IndexAlteration: &ast.DropStoredColumn{Name: c}})
+			}
+		}
+	}
+
+	return ddl
+}
+
 func (g *Generator) generateDDLForAlterIndex(from, to *Table) DDL {
 	ddl := DDL{}
 
@@ -1141,6 +1180,9 @@ func (g *Generator) generateDDLForAlterIndex(from, to *Table) DDL {
 				if _, exists := g.findIdentByName(toIndex.Storing.Columns, identsToComparable(fromIndexStoringColumn)); exists {
 					continue
 				}
+			}
+			if _, kept := g.findColumnByName(to.Columns, identsToComparable(fromIndexStoringColumn)); !kept {
+				continue
 			}
 			ddl.Append(&ast.AlterIndex{
 				Name: toIndex.Name,

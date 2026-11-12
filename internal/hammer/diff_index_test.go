@@ -54,6 +54,54 @@ CREATE INDEX idx_t1_2 ON t1(t1_3);
 			},
 		},
 		{
+			name: "drop a stored column before dropping its table column",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+  t1_3 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2) STORING (t1_3);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(36) NOT NULL,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_2);
+`,
+			expected: []string{
+				`ALTER INDEX idx_t1_1 DROP STORED COLUMN t1_3`,
+				`ALTER TABLE t1 DROP COLUMN t1_3`,
+			},
+		},
+		{
+			name: "drop a stored column while another stored column is recreated",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_3 STRING(MAX),
+  t1_4 STRING(MAX),
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_1) STORING (t1_3, t1_4);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_4 INT64,
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx_t1_1 ON t1(t1_1) STORING (t1_4);
+`,
+			expected: []string{
+				`ALTER INDEX idx_t1_1 DROP STORED COLUMN t1_3`,
+				`DROP INDEX idx_t1_1`,
+				`ALTER TABLE t1 DROP COLUMN t1_4`,
+				`ALTER TABLE t1 ADD COLUMN t1_4 INT64`,
+				`CREATE INDEX idx_t1_1 ON t1(t1_1) STORING (t1_4)`,
+				`ALTER TABLE t1 DROP COLUMN t1_3`,
+			},
+		},
+		{
 			name: "alter index add stored column",
 			from: `
 CREATE TABLE t1 (

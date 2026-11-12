@@ -48,6 +48,8 @@ var (
 
 	// emulatorKnownRoundTripFailures are known failures on the emulator only.
 	emulatorKnownRoundTripFailures = map[string]string{
+		"TestDiffFunction/schema_names_are_case-sensitive/round_trip/forward":                             "the emulator treats schema names case-insensitively",
+		"TestDiffFunction/schema_names_are_case-sensitive/round_trip/reverse":                             "the emulator treats schema names case-insensitively",
 		"TestDiffAlterDatabase/remove_an_option_the_generator_has_no_special_case_for/round_trip/forward": "the emulator rejects default_leader = null",
 		"TestDiffColumn/add_hidden_attribute_to_column/round_trip/forward":                                "the emulator rejects HIDDEN in ALTER COLUMN",
 		"TestDiffColumn/add_hidden_attribute_to_column/round_trip/reverse":                                "the emulator keeps HIDDEN when ALTER COLUMN omits it",
@@ -102,6 +104,8 @@ var (
 		"TestDiffView/drop_view_before_column_it_references":                                                  "view column is not qualified by its table",
 		"TestDiffView/drop_views_in_reverse_definition_order":                                                 "view column is not qualified by its table",
 		"TestDiffVectorIndex/null_option_is_the_same_as_an_absent_option":                                     "Spanner rejects a NULL vector index option",
+		"TestDiffFunction/create_view_calling_a_function_declared_after_it":                                   "the view is declared before the function it calls",
+		"TestDiffFunction/function_calling_a_function_declared_after_it":                                      "the function is declared before the function it calls",
 		"TestDiffView/create_a_view_after_the_view_it_selects_from":                                           "view is declared before the view it selects from",
 	}
 
@@ -113,6 +117,11 @@ var (
 
 	// emulatorInvalidSchemas are cases whose schema only the emulator rejects.
 	emulatorInvalidSchemas = map[string]string{
+		"TestDiffFunction/change_the_body_of_a_function_without_RETURNS_under_a_view_that_calls_it":                  "the emulator cannot store a function without RETURNS",
+		"TestDiffFunction/create_function_before_the_generated_column_that_calls_it":                                 "the emulator rejects a function in a stored generated column",
+		"TestDiffFunction/drop_function_after_the_generated_column_that_called_it":                                   "the emulator rejects a function in a stored generated column",
+		"TestDiffFunction/create_function_before_the_check_constraint_that_calls_it":                                 "the emulator rejects a function in a CHECK constraint",
+		"TestDiffFunction/drop_function_after_the_check_constraint_that_called_it":                                   "the emulator rejects a function in a CHECK constraint",
 		"TestDiffCheckConstraint/recreating_a_column_does_not_re-add_a_same-named_check_constraint_on_another_table": "two constraints share a name",
 		"TestDiffChangeStream/change_stream_OPTIONS_value_change_is_still_detected":                                  "change stream retention period is out of range",
 		"TestDiffAlterDatabase/remove_one_option_and_keep_another":                                                   "the emulator does not support this database option",

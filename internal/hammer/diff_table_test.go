@@ -421,6 +421,157 @@ CREATE TABLE t1 (
 			},
 		},
 		{
+			name: "change column (STRING to BYTES)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX),
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 BYTES(MAX),
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{
+				`ALTER TABLE t1 ALTER COLUMN t1_2 BYTES(MAX)`,
+			},
+		},
+		{
+			name: "change column (BYTES to STRING)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 BYTES(100),
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX),
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{
+				`ALTER TABLE t1 ALTER COLUMN t1_2 STRING(MAX)`,
+			},
+		},
+		{
+			name: "change column (ARRAY<STRING> to ARRAY<BYTES>)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 ARRAY<STRING(10)>,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 ARRAY<BYTES(10)>,
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{
+				`ALTER TABLE t1 ALTER COLUMN t1_2 ARRAY<BYTES(10)>`,
+			},
+		},
+		{
+			name: "change column (STRING to BYTES and adding NOT NULL stays drop and add)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(10),
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 BYTES(10) NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{
+				`ALTER TABLE t1 DROP COLUMN t1_2`,
+				`ALTER TABLE t1 ADD COLUMN t1_2 BYTES(10) NOT NULL DEFAULT (b"")`,
+				`ALTER TABLE t1 ALTER COLUMN t1_2 DROP DEFAULT`,
+			},
+		},
+		{
+			name: "change column (STRING to BYTES while indexed)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(10),
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx1 ON t1(t1_2);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 BYTES(10),
+) PRIMARY KEY(t1_1);
+CREATE INDEX idx1 ON t1(t1_2);
+`,
+			expected: []string{
+				`ALTER TABLE t1 ALTER COLUMN t1_2 BYTES(10)`,
+			},
+		},
+		{
+			name: "change column (INT64 to STRING stays drop and add)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 INT64,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(MAX),
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{
+				`ALTER TABLE t1 DROP COLUMN t1_2`,
+				`ALTER TABLE t1 ADD COLUMN t1_2 STRING(MAX)`,
+			},
+		},
+		{
+			name: "change column (STRING to BYTES in primary key recreates the table)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 STRING(10) NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 BYTES(10) NOT NULL,
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{
+				`DROP TABLE t1`,
+				"CREATE TABLE t1 (\n  t1_1 BYTES(10) NOT NULL\n) PRIMARY KEY (t1_1)",
+			},
+		},
+		{
+			name: "change column (STRING to BYTES used by generated column stays drop and add)",
+			from: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 STRING(10),
+  t1_3 INT64 AS (LENGTH(t1_2)) STORED,
+) PRIMARY KEY(t1_1);
+`,
+			to: `
+CREATE TABLE t1 (
+  t1_1 INT64 NOT NULL,
+  t1_2 BYTES(10),
+  t1_3 INT64 AS (LENGTH(t1_2)) STORED,
+) PRIMARY KEY(t1_1);
+`,
+			expected: []string{
+				`ALTER TABLE t1 DROP COLUMN t1_2`,
+				`ALTER TABLE t1 ADD COLUMN t1_2 BYTES(10)`,
+			},
+		},
+		{
 			name: "set NOT NULL to timestamp column",
 			from: `
 CREATE TABLE t1 (

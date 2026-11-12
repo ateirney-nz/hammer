@@ -23,6 +23,7 @@ func TestDiffDataLosses(t *testing.T) {
 		{"drop sequence", "CREATE SEQUENCE s OPTIONS (sequence_kind = 'bit_reversed_positive');", "", []string{"DROP SEQUENCE s"}},
 		{"drop queue", "CREATE QUEUE q (id INT64 NOT NULL) PRIMARY KEY(id);", "", []string{"DROP QUEUE q"}},
 		{"primary key change recreates table", table, "CREATE TABLE t1 (a INT64 NOT NULL, b INT64, c STRING(10)) PRIMARY KEY(a, b);", []string{"DROP TABLE t1"}},
+		{"placement key change recreates table", table, "CREATE TABLE t1 (a INT64 NOT NULL, b INT64, c STRING(MAX) NOT NULL PLACEMENT KEY) PRIMARY KEY(a);", []string{"DROP TABLE t1"}},
 		{"add row deletion policy", rdp + ";", rdp + ", ROW DELETION POLICY (OLDER_THAN(ts, INTERVAL 1 DAY));", []string{"ALTER TABLE t2 ADD ROW DELETION POLICY ( OLDER_THAN ( ts, INTERVAL 1 DAY ))"}},
 		{"replace row deletion policy", rdp + ", ROW DELETION POLICY (OLDER_THAN(ts, INTERVAL 1 DAY));", rdp + ", ROW DELETION POLICY (OLDER_THAN(ts, INTERVAL 2 DAY));", []string{"ALTER TABLE t2 REPLACE ROW DELETION POLICY ( OLDER_THAN ( ts, INTERVAL 2 DAY ))"}},
 		{"drop row deletion policy", rdp + ", ROW DELETION POLICY (OLDER_THAN(ts, INTERVAL 1 DAY));", rdp + ";", nil},

@@ -72,6 +72,8 @@ var (
 		"TestDiffLocalityGroup/remove_a_locality_group_option_resets_it/round_trip/forward":                          "the emulator prints a reset locality group option as a trailing comma memefish cannot parse",
 		"TestDiffLocalityGroup/alter_the_default_locality_group/round_trip/reverse":                                  "the emulator prints a reset locality group option as a trailing comma memefish cannot parse",
 		"TestDiffLocalityGroup/removing_the_default_locality_group_alteration_resets_its_options/round_trip/forward": "the emulator prints a reset locality group option as a trailing comma memefish cannot parse",
+		"TestDiffPlacement/placement_names_are_case-sensitive/round_trip/forward":                                    "the emulator treats placement names case-insensitively",
+		"TestDiffPlacement/placement_names_are_case-sensitive/round_trip/reverse":                                    "the emulator treats placement names case-insensitively",
 	}
 
 	// invalidSchemas are cases whose from or to schema Spanner rejects on any target, so a round trip
@@ -132,6 +134,14 @@ var (
 		"TestDiffCheckConstraint/set_NOT_NULL_on_a_column_referenced_by_a_check_constraint_fills_NULLs_with_its_DEFAULT/round_trip/forward": "Spanner rejects changing the default of a column a CHECK constraint references",
 	}
 
+	// realInvalidSchemas are cases whose schema only real Spanner rejects.
+	realInvalidSchemas = map[string]string{
+		"TestDiffPlacement/create_placement_before_the_table_that_uses_it": "the test instance has no instance partition ip",
+		"TestDiffPlacement/drop_placement_after_its_table":                 "the test instance has no instance partition ip",
+		"TestDiffPlacement/same_placement":                                 "the test instance has no instance partition ip",
+		"TestDiffPlacement/placement_names_are_case-sensitive":             "the test instance has no instance partition ip",
+	}
+
 	// emulatorInvalidSchemas are cases whose schema only the emulator rejects.
 	emulatorInvalidSchemas = map[string]string{
 		"TestDiffLocalityGroup/locality_group_names_in_table_options_are_case-insensitive":                           "the emulator rejects locality_group = 'default' (Locality group not found)",
@@ -180,6 +190,11 @@ func roundTrip(t *testing.T, from, to string, option *hammer.DDLOption) {
 			}
 			if reason := emulatorUnsupported(t, option, from, to); reason != "" {
 				t.Skip(reason)
+			}
+		}
+		if !roundTripEmulator {
+			if reason, ok := realInvalidSchemas[name]; ok {
+				t.Skip("real Spanner rejects the schema: " + reason)
 			}
 		}
 		// Both schemas must be valid on the target, or a rejected diff says nothing about hammer.

@@ -43,6 +43,7 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		sequences            []*Sequence
 		models               []*Model
 		localityGroups       []*LocalityGroup
+		placements           []*Placement
 		roles                []*Role
 		grants               []*Grant
 		alterDatabaseOptions *ast.AlterDatabase
@@ -119,6 +120,8 @@ func NewDatabase(ddl DDL) (*Database, error) {
 				return nil, fmt.Errorf("unexpected ddl statement: %v", stmt.SQL())
 			}
 			localityGroups = append(localityGroups, &LocalityGroup{CreateLocalityGroup: &ast.CreateLocalityGroup{Name: stmt.Name, Options: stmt.Options}})
+		case *ast.CreatePlacement:
+			placements = append(placements, &Placement{CreatePlacement: stmt})
 		case *ast.CreateRole:
 			roles = append(roles, &Role{CreateRole: stmt})
 		case *ast.Grant:
@@ -156,6 +159,7 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		sequences:            sequences,
 		models:               models,
 		localityGroups:       localityGroups,
+		placements:           placements,
 		roles:                roles,
 		grants:               grants,
 		alterDatabaseOptions: alterDatabaseOptions,
@@ -173,6 +177,7 @@ type Database struct {
 	sequences            []*Sequence
 	models               []*Model
 	localityGroups       []*LocalityGroup
+	placements           []*Placement
 	roles                []*Role
 	grants               []*Grant
 	alterDatabaseOptions *ast.AlterDatabase
@@ -304,6 +309,10 @@ const (
 	localityGroupOption  = "locality_group"
 )
 
+type Placement struct {
+	*ast.CreatePlacement
+}
+
 type Role struct {
 	*ast.CreateRole
 }
@@ -392,6 +401,16 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 		}
 	}
 
+	// create placements before the tables that use them
+	for _, toPlacement := range g.to.placements {
+		fromPlacement, exists := findFirst(g.from.placements, func(p *Placement) bool { return identsToComparable(p.Name) == identsToComparable(toPlacement.Name) })
+		if !exists {
+			ddl.Append(toPlacement)
+		} else if !g.optionsEqual(fromPlacement.Options, toPlacement.Options) {
+			return DDL{}, fmt.Errorf("Spanner cannot alter placement %s; create a new placement, move the rows to it, then drop the old one", toPlacement.Name.Name)
+		}
+	}
+
 	// create or replace functions before the views and functions that call them
 	functions, err := sortFunctionsByDependency(g.to.functions)
 	if err != nil {
@@ -473,7 +492,7 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 			continue
 		}
 
-		if !g.primaryKeyEqual(fromTable, toTable) {
+		if !g.primaryKeyEqual(fromTable, toTable) || !placementKeyEqual(fromTable, toTable) {
 			ddl.AppendDDL(g.generateDDLForDropConstraintIndexAndTable(fromTable))
 			ddl.AppendDDL(g.generateDDLForCreateTableAndIndex(toTable))
 			continue
@@ -639,6 +658,13 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 			continue
 		}
 		ddl.Append(&ast.DropLocalityGroup{Name: fromGroup.Name})
+	}
+
+	// drop placements after the tables that use them
+	for _, fromPlacement := range g.from.placements {
+		if _, exists := findFirst(g.to.placements, func(p *Placement) bool { return identsToComparable(p.Name) == identsToComparable(fromPlacement.Name) }); !exists {
+			ddl.Append(&ast.DropPlacement{Name: fromPlacement.Name})
+		}
 	}
 
 	// for roles
@@ -1558,6 +1584,20 @@ func (g *Generator) interleaveEqual(x, y *Table) bool {
 			return cmp.Equal(aVal, bVal, ignorePos)
 		}),
 	)
+}
+
+// placementKeyEqual reports whether both tables have the same placement key column; Spanner
+// cannot add, drop or move one on an existing table.
+func placementKeyEqual(x, y *Table) bool {
+	key := func(t *Table) string {
+		for _, c := range t.Columns {
+			if c.PlacementKey != nil {
+				return strings.ToLower(c.Name.Name)
+			}
+		}
+		return ""
+	}
+	return key(x) == key(y)
 }
 
 func (g *Generator) primaryKeyEqual(x, y *Table) bool {

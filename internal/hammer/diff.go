@@ -664,7 +664,7 @@ func (g *Generator) generateDDLForDropConstraintIndexAndTable(table *Table) DDL 
 		return identsToComparable(fk.ReferenceTable.Idents...) == identsToComparable(table.Name.Idents...)
 	}))
 	g.markGrantsDropped(g.from.grantsOnTable(table))
-	ddl.Append(&ast.DropTable{Name: table.Name})
+	ddl.Append(DataLoss{&ast.DropTable{Name: table.Name}, "drops table " + table.Name.SQL()})
 	g.droppedTables = append(g.droppedTables, identsToComparable(table.Name.Idents...))
 	return ddl
 }
@@ -766,9 +766,17 @@ func (g *Generator) generateDDLForRowDeletionPolicy(from, to *Table) DDL {
 	ddl := DDL{}
 
 	if alteration := g.rowDeletionPolicyAlteration(from.RowDeletionPolicy, to.RowDeletionPolicy); alteration != nil {
-		ddl.Append(&ast.AlterTable{Name: to.Name, TableAlteration: alteration})
+		ddl.Append(markRowDeletionPolicy(&ast.AlterTable{Name: to.Name, TableAlteration: alteration}, alteration))
 	}
 	return ddl
+}
+
+// markRowDeletionPolicy flags the alterations that start deleting rows.
+func markRowDeletionPolicy(stmt Statement, alteration rowDeletionPolicyAlteration) Statement {
+	if _, drops := alteration.(*ast.DropRowDeletionPolicy); drops {
+		return stmt
+	}
+	return DataLoss{stmt, "row deletion policy may delete existing rows"}
 }
 
 // rowDeletionPolicyAlteration is an alteration that both ALTER TABLE and ALTER QUEUE accept.
@@ -890,10 +898,10 @@ func (g *Generator) generateDDLForDropColumn(table *ast.Path, column *ast.Ident)
 		}
 	}
 
-	ddl.Append(&ast.AlterTable{
+	ddl.Append(DataLoss{&ast.AlterTable{
 		Name:            table,
 		TableAlteration: &ast.DropColumn{Name: column},
-	})
+	}, "drops column " + table.SQL() + "." + column.SQL()})
 
 	return ddl
 }
@@ -1657,7 +1665,7 @@ func (g *Generator) generateDDLForAlterQueue(from, to *Queue) DDL {
 	}
 
 	if alteration := g.rowDeletionPolicyAlteration(from.RowDeletionPolicy, to.RowDeletionPolicy); alteration != nil {
-		ddl.Append(&ast.AlterQueue{Name: to.Name, QueueAlteration: alteration})
+		ddl.Append(markRowDeletionPolicy(&ast.AlterQueue{Name: to.Name, QueueAlteration: alteration}, alteration))
 	}
 
 	if !g.optionsEqual(from.Options, to.Options) {
@@ -1672,7 +1680,7 @@ func (g *Generator) generateDDLForDropQueue(queue *Queue) DDL {
 	// Dropping the queue also removes its grants, so record them as dropped without REVOKE.
 	g.markGrantsDropped(g.from.grantsOnQueue(queue))
 
-	ddl.Append(&ast.DropQueue{Name: queue.Name})
+	ddl.Append(DataLoss{&ast.DropQueue{Name: queue.Name}, "drops queue " + queue.Name.SQL()})
 	g.droppedQueues = append(g.droppedQueues, identsToComparable(queue.Name.Idents...))
 	return ddl
 }
@@ -1686,7 +1694,7 @@ func (g *Generator) findSequenceByName(sequences []*Sequence, name string) (*Seq
 func (g *Generator) generateDDLForDropSequence(sequence *Sequence) DDL {
 	ddl := DDL{}
 	g.markGrantsDropped(g.from.grantsOnSequence(sequence))
-	ddl.Append(&ast.DropSequence{Name: sequence.Name})
+	ddl.Append(DataLoss{&ast.DropSequence{Name: sequence.Name}, "drops sequence " + sequence.Name.SQL()})
 	return ddl
 }
 

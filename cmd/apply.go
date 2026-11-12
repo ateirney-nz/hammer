@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -85,6 +86,18 @@ var (
 				return nil
 			}
 
+			allowDataLoss, err := cmd.Flags().GetBool("allow-data-loss")
+			if err != nil {
+				return err
+			}
+			if losses := ddl.DataLosses(); len(losses) > 0 && !allowDataLoss {
+				var b strings.Builder
+				for _, l := range losses {
+					fmt.Fprintf(&b, "\n  %s (%s)", l.SQL(), l.Reason)
+				}
+				return fmt.Errorf("refusing to apply statements that lose data, pass --allow-data-loss to proceed:%s", b.String())
+			}
+
 			if err := database.Apply(ctx, ddl); err != nil {
 				return err
 			}
@@ -94,6 +107,7 @@ var (
 )
 
 func init() {
+	applyCmd.Flags().Bool("allow-data-loss", false, "apply statements that drop tables, columns, queues or sequences")
 	applyCmd.Flags().Bool("ignore-alter-database", false, "ignore alter database statements")
 	applyCmd.Flags().Bool("ignore-change-streams", false, "ignore change streams statements")
 	applyCmd.Flags().Bool("ignore-models", false, "ignore model statements")

@@ -63,6 +63,10 @@ var (
 			if err != nil {
 				return err
 			}
+			derive, err := cmd.Flags().GetBool("derive-proto-bundle")
+			if err != nil {
+				return err
+			}
 			ddlOption := &hammer.DDLOption{
 				IgnoreAlterDatabase: ignoreAlterDatabase,
 				IgnoreChangeStreams: ignoreChangeStreams,
@@ -83,11 +87,11 @@ var (
 				return err
 			}
 
-			ddl1, err := readDDL(ctx, source1, "from-proto-descriptors", fromDescriptors, ddlOption)
+			ddl1, err := readDDL(ctx, source1, "from-proto-descriptors", fromDescriptors, derive, ddlOption)
 			if err != nil {
 				return err
 			}
-			ddl2, err := readDDL(ctx, source2, "proto-descriptors", descriptors, ddlOption)
+			ddl2, err := readDDL(ctx, source2, "proto-descriptors", descriptors, derive, ddlOption)
 			if err != nil {
 				return err
 			}
@@ -116,7 +120,9 @@ func init() {
 	diffCmd.Flags().Bool("ignore-models", false, "ignore model statements")
 	diffCmd.Flags().Bool("ignore-proto-bundles", false, "ignore proto bundle statements")
 	diffCmd.Flags().String("from-proto-descriptors", "", "proto descriptors file (FileDescriptorSet) of SOURCE1, a file or standard input")
+	diffCmd.Flags().Bool("derive-proto-bundle", false, "build the proto bundle from the types the schema uses, ignoring any CREATE PROTO BUNDLE; needs proto descriptors")
 	diffCmd.Flags().String("proto-descriptors", "", "proto descriptors file (FileDescriptorSet) of SOURCE2, a file or standard input")
+	diffCmd.MarkFlagsMutuallyExclusive("derive-proto-bundle", "ignore-proto-bundles")
 
 	rootCmd.AddCommand(diffCmd)
 }

@@ -54,6 +54,10 @@ var (
 			if err != nil {
 				return err
 			}
+			derive, err := cmd.Flags().GetBool("derive-proto-bundle")
+			if err != nil {
+				return err
+			}
 			ddlOption := &hammer.DDLOption{
 				IgnoreAlterDatabase: ignoreAlterDatabase,
 				IgnoreChangeStreams: ignoreChangeStreams,
@@ -77,7 +81,7 @@ var (
 			if err != nil {
 				return err
 			}
-			sourceDDL, err := readDDL(ctx, source, "proto-descriptors", descriptors, ddlOption)
+			sourceDDL, err := readDDL(ctx, source, "proto-descriptors", descriptors, derive, ddlOption)
 			if err != nil {
 				return err
 			}
@@ -119,7 +123,9 @@ func init() {
 	applyCmd.Flags().Bool("ignore-change-streams", false, "ignore change streams statements")
 	applyCmd.Flags().Bool("ignore-models", false, "ignore model statements")
 	applyCmd.Flags().Bool("ignore-proto-bundles", false, "ignore proto bundle statements")
+	applyCmd.Flags().Bool("derive-proto-bundle", false, "build the proto bundle from the types the schema uses, ignoring any CREATE PROTO BUNDLE; needs proto descriptors")
 	applyCmd.Flags().String("proto-descriptors", "", "proto descriptors file (FileDescriptorSet) of SOURCE, a file or standard input")
+	applyCmd.MarkFlagsMutuallyExclusive("derive-proto-bundle", "ignore-proto-bundles")
 
 	rootCmd.AddCommand(applyCmd)
 }

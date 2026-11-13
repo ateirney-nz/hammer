@@ -126,6 +126,13 @@ The descriptors are sent only with the statements that touch the bundle. With th
 `apply` refuses to run when a comparison was skipped; pass `--proto-descriptors`.
 `--ignore-proto-bundles` also ignores the descriptors.
 
+`--derive-proto-bundle` (on `diff`, `apply` and `create`) builds the bundle from the proto and enum types
+the schema uses, with the types their fields need and the messages enclosing nested ones, and ignores any
+`CREATE PROTO BUNDLE` in that file (a `-- note:` on standard error says so). Types nothing uses are left out, so `apply`
+deletes them from the live bundle. It needs the file's descriptors and applies only to files and standard
+input, never to a live database; for `diff` a file or standard input SOURCE1 needs `--from-proto-descriptors`.
+It cannot be combined with `--ignore-proto-bundles`.
+
 A type update that removes or changes a field runs after the other changes, so it cannot also add a
 field that a new column in the same diff reads; split it into two migrations.
 `ALTER PROTO BUNDLE DELETE` needs the deleted type in the descriptors, so keep it there until the

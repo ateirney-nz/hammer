@@ -23,13 +23,29 @@ func Diff(ddl1, ddl2 DDL) (DDL, error) {
 	if err != nil {
 		return DDL{}, err
 	}
+	if database2.protoTypes != nil && database2.protoBundle != nil {
+		for _, nt := range database2.protoBundle.Types.Types {
+			if !database2.protoTypes[identsToComparable(nt.Path...)].exists() {
+				return DDL{}, fmt.Errorf("proto bundle type %s is not in the proto descriptors", nt.SQL())
+			}
+		}
+	}
 
 	generator := &Generator{
 		from:                      database1,
 		to:                        database2,
 		alteredChangeStreamStates: map[string]*ChangeStream{},
 	}
-	return generator.GenerateDDL()
+	ddl, err := generator.GenerateDDL()
+	if err != nil {
+		return DDL{}, err
+	}
+	// The to side describes every bundle statement; only a DROP, with no bundle left, falls back to the from side.
+	ddl.ProtoDescriptors = ddl2.ProtoDescriptors
+	if database2.protoBundle == nil {
+		ddl.ProtoDescriptors = ddl1.ProtoDescriptors
+	}
+	return ddl, nil
 }
 
 func NewDatabase(ddl DDL) (*Database, error) {
@@ -49,6 +65,7 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		grants               []*Grant
 		alterDatabaseOptions *ast.AlterDatabase
 		options              *ast.Options
+		protoBundle          *ast.CreateProtoBundle
 	)
 
 	m := make(map[string]*Table)
@@ -129,6 +146,11 @@ func NewDatabase(ddl DDL) (*Database, error) {
 			roles = append(roles, &Role{CreateRole: stmt})
 		case *ast.Grant:
 			grants = append(grants, &Grant{Grant: stmt})
+		case *ast.CreateProtoBundle:
+			if protoBundle != nil {
+				return nil, fmt.Errorf("unexpected ddl statement: %v", stmt.SQL())
+			}
+			protoBundle = stmt
 		default:
 			return nil, fmt.Errorf("unexpected ddl statement: %v", stmt.SQL())
 		}
@@ -152,6 +174,11 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		}
 	}
 
+	protoTypes, err := parseProtoTypes(ddl.ProtoDescriptors)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Database{
 		schemas:              schemas,
 		tables:               tables,
@@ -168,6 +195,8 @@ func NewDatabase(ddl DDL) (*Database, error) {
 		grants:               grants,
 		alterDatabaseOptions: alterDatabaseOptions,
 		options:              options,
+		protoBundle:          protoBundle,
+		protoTypes:           protoTypes,
 	}, nil
 }
 
@@ -187,6 +216,8 @@ type Database struct {
 	grants               []*Grant
 	alterDatabaseOptions *ast.AlterDatabase
 	options              *ast.Options
+	protoBundle          *ast.CreateProtoBundle
+	protoTypes           protoTypes
 }
 
 func (d *Database) grantsOnTable(table *Table) []*Grant {
@@ -372,6 +403,7 @@ type Generator struct {
 	willCreateOrAlterChangeStreams []*ChangeStream
 	deferredColumnDrops            DDL
 	alteredChangeStreamStates      map[string]*ChangeStream
+	notes                          []string
 }
 
 func (g *Generator) GenerateDDL() (DDL, error) {
@@ -386,6 +418,10 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 			ddl.Append(toSchema)
 		}
 	}
+
+	// create or insert bundle types before any column, function or default that may use them
+	protoBundleEarly, protoBundleLate := g.generateDDLForProtoBundle()
+	ddl.AppendDDL(protoBundleEarly)
 
 	// create or alter sequences before any column default that may use them
 	for _, toSequence := range g.to.sequences {
@@ -732,6 +768,9 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 		}
 	}
 
+	// remove bundle types after every column and function that used them has been dropped
+	ddl.AppendDDL(protoBundleLate)
+
 	// drop schemas after every object inside them has been dropped
 	for _, fromSchema := range g.from.schemas {
 		if _, exists := g.findSchemaByName(g.to.schemas, identsToComparable(fromSchema.Name)); !exists {
@@ -739,6 +778,7 @@ func (g *Generator) GenerateDDL() (DDL, error) {
 		}
 	}
 
+	ddl.Notes = g.notes
 	return ddl, nil
 }
 

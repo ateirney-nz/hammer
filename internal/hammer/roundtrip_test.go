@@ -189,7 +189,7 @@ var (
 // It runs only when SPANNER_EMULATOR_HOST or HAMMER_TEST_INSTANCE (projects/p/instances/i on real Spanner) is set; a real instance creates
 // two databases per case, so it needs a -timeout well past the default. Case lists name the targets
 // they hold for: unsuffixed for every target, emulator* or real* for one.
-func roundTrip(t *testing.T, from, to string, option *hammer.DDLOption) {
+func roundTrip(t *testing.T, from, to string, fromDescriptors, toDescriptors []byte, option *hammer.DDLOption) {
 	t.Helper()
 	inst, admin := roundTripTarget(t)
 	if inst == "" {
@@ -214,14 +214,14 @@ func roundTrip(t *testing.T, from, to string, option *hammer.DDLOption) {
 			}
 		}
 		// Both schemas must be valid on the target, or a rejected diff says nothing about hammer.
-		fromClient := createDatabase(t, inst, admin, from, option)
-		toClient := createDatabase(t, inst, admin, to, option)
-		t.Run("forward", func(t *testing.T) { applyAndCompare(t, fromClient, from, to, option) })
-		t.Run("reverse", func(t *testing.T) { applyAndCompare(t, toClient, to, from, option) })
+		fromClient := createDatabase(t, inst, admin, from, fromDescriptors, option)
+		toClient := createDatabase(t, inst, admin, to, toDescriptors, option)
+		t.Run("forward", func(t *testing.T) { applyAndCompare(t, fromClient, from, to, fromDescriptors, toDescriptors, option) })
+		t.Run("reverse", func(t *testing.T) { applyAndCompare(t, toClient, to, from, toDescriptors, fromDescriptors, option) })
 	})
 }
 
-func applyAndCompare(t *testing.T, client *hammer.Client, from, to string, option *hammer.DDLOption) {
+func applyAndCompare(t *testing.T, client *hammer.Client, from, to string, fromDescriptors, toDescriptors []byte, option *hammer.DDLOption) {
 	target := realKnownRoundTripFailures
 	if roundTripEmulator {
 		target = emulatorKnownRoundTripFailures
@@ -233,7 +233,10 @@ func applyAndCompare(t *testing.T, client *hammer.Client, from, to string, optio
 	}
 	ctx := context.Background()
 	want := parse(t, to, option)
-	ddl, err := hammer.Diff(parse(t, from, option), want)
+	want.ProtoDescriptors = toDescriptors
+	have := parse(t, from, option)
+	have.ProtoDescriptors = fromDescriptors
+	ddl, err := hammer.Diff(have, want)
 	if err != nil {
 		t.Fatalf("failed to diff: %v", err)
 	}
@@ -241,11 +244,16 @@ func applyAndCompare(t *testing.T, client *hammer.Client, from, to string, optio
 		t.Fatalf("Spanner rejected the diff:\n%s\nerror: %v", strings.Join(convertStrings(ddl), ";\n"), err)
 	}
 
-	var schema string
-	if err := retryQuota(func() (err error) { schema, err = client.GetDatabaseDDL(ctx); return }); err != nil {
+	var (
+		schema      string
+		descriptors []byte
+	)
+	if err := retryQuota(func() (err error) { schema, descriptors, err = client.GetDatabaseDDL(ctx); return }); err != nil {
 		t.Fatalf("failed to read schema back: %v", err)
 	}
-	rest, err := hammer.Diff(parse(t, schema, option), want)
+	readBack := parse(t, schema, option)
+	readBack.ProtoDescriptors = descriptors
+	rest, err := hammer.Diff(readBack, want)
 	if err != nil {
 		t.Fatalf("failed to diff schema read back: %v\n%s", err, schema)
 	}
@@ -297,7 +305,7 @@ func emulatorUnsupported(t *testing.T, option *hammer.DDLOption, schemas ...stri
 	return ""
 }
 
-func createDatabase(t *testing.T, inst string, admin *database.DatabaseAdminClient, schema string, option *hammer.DDLOption) *hammer.Client {
+func createDatabase(t *testing.T, inst string, admin *database.DatabaseAdminClient, schema string, descriptors []byte, option *hammer.DDLOption) *hammer.Client {
 	ctx := context.Background()
 	name := fmt.Sprintf("%s-%d", databasePrefix, databaseSeq.Add(1))
 	client, err := hammer.NewClient(ctx, fmt.Sprintf("spanner://%s/databases/%s", inst, name))
@@ -306,6 +314,7 @@ func createDatabase(t *testing.T, inst string, admin *database.DatabaseAdminClie
 	}
 	t.Cleanup(func() { client.Close() })
 	ddl := parse(t, schema, option)
+	ddl.ProtoDescriptors = descriptors
 	if err := retryQuota(func() error { return client.CreateDatabase(ctx, ddl) }); err != nil {
 		t.Fatalf("Spanner rejected the schema: %v", err)
 	}

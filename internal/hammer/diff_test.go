@@ -52,12 +52,12 @@ CREATE TABLE t2 (
 		},
 		{
 			name:    "unsupported statement",
-			to:      `ALTER PROTO BUNDLE INSERT (a.B);`,
+			to:      `DROP TABLE t;`,
 			wantErr: "unexpected ddl statement",
 		},
 		{
 			name:    "unsupported statement in from",
-			from:    `ALTER PROTO BUNDLE INSERT (a.B);`,
+			from:    `DROP TABLE t;`,
 			wantErr: "unexpected ddl statement",
 		},
 	})
@@ -126,6 +126,8 @@ type diffTestCase struct {
 	to                  string
 	ignoreAlterDatabase bool
 	ignoreProtoBundles  bool
+	fromDescriptors     []byte
+	toDescriptors       []byte
 	expected            []string
 	wantErr             string
 }
@@ -147,6 +149,7 @@ func runDiffTests(t *testing.T, tests []diffTestCase) {
 			if err != nil {
 				t.Fatalf("failed to parse to: %v", err)
 			}
+			from.ProtoDescriptors, to.ProtoDescriptors = tt.fromDescriptors, tt.toDescriptors
 
 			ddl, err := hammer.Diff(from, to)
 			if tt.wantErr != "" {
@@ -180,7 +183,7 @@ func runDiffTests(t *testing.T, tests []diffTestCase) {
 			if _, err := hammer.Diff(to, from); err != nil {
 				t.Errorf("to -> from: unexpected error: %v", err)
 			}
-			roundTrip(t, tt.from, tt.to, option)
+			roundTrip(t, tt.from, tt.to, tt.fromDescriptors, tt.toDescriptors, option)
 		})
 	}
 }

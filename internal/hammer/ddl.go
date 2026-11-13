@@ -21,6 +21,10 @@ type DataLoss struct {
 
 type DDL struct {
 	List []Statement
+	// ProtoDescriptors is the serialized FileDescriptorSet that describes the proto bundle statements.
+	ProtoDescriptors []byte
+	// Notes are things the caller should see about the diff, such as skipped comparisons.
+	Notes []string
 }
 
 func (d *DDL) Append(stmts ...Statement) {
@@ -66,9 +70,13 @@ func ParseDDL(uri, schema string, option *DDLOption) (DDL, error) {
 		if _, ok := stmt.(*ast.CreateModel); ok && option.IgnoreModels {
 			continue
 		}
-		if _, ok := stmt.(*ast.CreateProtoBundle); ok && option.IgnoreProtoBundles {
-			continue
+		if option.IgnoreProtoBundles {
+			switch stmt.(type) {
+			case *ast.CreateProtoBundle, *ast.AlterProtoBundle, *ast.DropProtoBundle:
+				continue
+			}
 		}
+		unquoteProtoTypeNames(stmt)
 		if seq, ok := stmt.(*ast.CreateSequence); ok {
 			normalized, err := normalizeCreateSequence(seq)
 			if err != nil {

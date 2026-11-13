@@ -56,11 +56,15 @@ func (s *SpannerSource) String() string {
 }
 
 func (s *SpannerSource) DDL(ctx context.Context, option *DDLOption) (DDL, error) {
-	schema, err := s.client.GetDatabaseDDL(ctx)
+	schema, descriptors, err := s.client.GetDatabaseDDL(ctx)
 	if err != nil {
 		return DDL{}, err
 	}
-	return ParseDDL(s.uri, schema, option)
+	ddl, err := ParseDDL(s.uri, schema, option)
+	if !option.IgnoreProtoBundles {
+		ddl.ProtoDescriptors = descriptors
+	}
+	return ddl, err
 }
 
 func (s *SpannerSource) Apply(ctx context.Context, ddl DDL) error {

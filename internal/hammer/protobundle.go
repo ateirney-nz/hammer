@@ -1,9 +1,14 @@
 package hammer
 
 import (
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/cloudspannerecosystem/memefish/ast"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 // unquoteProtoTypeNames splits a type written as one backtick-quoted dotted identifier into a
@@ -104,4 +109,91 @@ func alterUpdate(types []*ast.NamedType) *ast.AlterProtoBundleUpdate {
 		return nil
 	}
 	return &ast.AlterProtoBundleUpdate{Types: protoBundleTypes(types...)}
+}
+
+// DeriveProtoBundle replaces the proto bundle of ddl with the one its schema needs, and reports
+// whether it replaced a CREATE PROTO BUNDLE. Spanner requires a bundle to hold every type the
+// schema uses, every type a bundled message's fields use and every message enclosing a bundled
+// nested type; map entries are never bundle types, but their key and value types are followed.
+func DeriveProtoBundle(ddl DDL) (_ DDL, ignored bool, _ error) {
+	types, err := parseProtoTypes(ddl.ProtoDescriptors)
+	if err != nil {
+		return DDL{}, false, err
+	}
+	if types == nil {
+		return DDL{}, false, fmt.Errorf("deriving the proto bundle needs proto descriptors")
+	}
+	var list []Statement
+	roots := map[string]bool{}
+	for _, stmt := range ddl.List {
+		if _, ok := stmt.(*ast.CreateProtoBundle); ok {
+			ignored = true
+			continue
+		}
+		list = append(list, stmt)
+		for n := range ast.Preorder(stmt.(ast.Node)) {
+			if nt, ok := n.(*ast.NamedType); ok && !isUUID(nt) {
+				roots[identsToComparable(nt.Path...)] = true
+			}
+		}
+	}
+
+	var errs []error
+	seen := map[string]bool{}
+	var visit func(name, from string)
+	visit = func(name, from string) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		t, ok := types[name]
+		switch {
+		case !ok && from == "":
+			errs = append(errs, fmt.Errorf("type %s is not in the proto descriptors", name))
+			return
+		case !ok:
+			errs = append(errs, fmt.Errorf("type %s (used by %s) is not in the proto descriptors; build them with their imports", name, from))
+			return
+		}
+		if t.parent != "" {
+			visit(t.parent, name)
+		}
+		for _, f := range t.msg.GetField() {
+			switch f.GetType() {
+			case descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, descriptorpb.FieldDescriptorProto_TYPE_GROUP, descriptorpb.FieldDescriptorProto_TYPE_ENUM:
+				visit(strings.TrimPrefix(f.GetTypeName(), "."), name)
+			}
+		}
+	}
+	// Checked before the closure, which would otherwise mark a map entry seen through its message.
+	for _, name := range slices.Sorted(maps.Keys(roots)) {
+		if types[name].mapEntry {
+			errs = append(errs, fmt.Errorf("type %s is a map entry, not a bundle type", name))
+			delete(roots, name)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(roots)) {
+		visit(name, "")
+	}
+	if err := errors.Join(errs...); err != nil {
+		return DDL{}, false, err
+	}
+
+	var bundle []*ast.NamedType
+	for _, name := range slices.Sorted(maps.Keys(seen)) {
+		if types[name].mapEntry {
+			continue
+		}
+		path := strings.Split(name, ".")
+		nt := &ast.NamedType{Path: make([]*ast.Ident, len(path))}
+		for i, part := range path {
+			nt.Path[i] = &ast.Ident{Name: part}
+		}
+		bundle = append(bundle, nt)
+	}
+	ddl.List = list
+	if len(bundle) > 0 {
+		ddl.List = append([]Statement{&ast.CreateProtoBundle{Types: protoBundleTypes(bundle...)}}, list...)
+	}
+	return ddl, ignored, nil
 }

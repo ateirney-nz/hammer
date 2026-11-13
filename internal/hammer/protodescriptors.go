@@ -16,6 +16,9 @@ type protoTypes map[string]protoType
 type protoType struct {
 	msg  *descriptorpb.DescriptorProto     // nil for an enum
 	enum *descriptorpb.EnumDescriptorProto // nil for a message
+
+	parent   string // enclosing message, "" at top level
+	mapEntry bool
 }
 
 // parseProtoTypes returns nil for empty bytes; the first definition of a name wins.
@@ -34,19 +37,19 @@ func parseProtoTypes(b []byte) (protoTypes, error) {
 		}
 	}
 	for _, f := range set.GetFile() {
-		var addMessage func(prefix string, m *descriptorpb.DescriptorProto)
-		addMessage = func(prefix string, m *descriptorpb.DescriptorProto) {
+		var addMessage func(prefix, parent string, m *descriptorpb.DescriptorProto)
+		addMessage = func(prefix, parent string, m *descriptorpb.DescriptorProto) {
 			name := joinProtoName(prefix, m.GetName())
-			add(name, protoType{msg: m})
+			add(name, protoType{msg: m, parent: parent, mapEntry: m.GetOptions().GetMapEntry()})
 			for _, n := range m.GetNestedType() {
-				addMessage(name, n)
+				addMessage(name, name, n)
 			}
 			for _, e := range m.GetEnumType() {
-				add(joinProtoName(name, e.GetName()), protoType{enum: e})
+				add(joinProtoName(name, e.GetName()), protoType{enum: e, parent: name})
 			}
 		}
 		for _, m := range f.GetMessageType() {
-			addMessage(f.GetPackage(), m)
+			addMessage(f.GetPackage(), "", m)
 		}
 		for _, e := range f.GetEnumType() {
 			add(joinProtoName(f.GetPackage(), e.GetName()), protoType{enum: e})

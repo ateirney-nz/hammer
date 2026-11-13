@@ -335,3 +335,102 @@ func TestDiffProtoBundle_TypeMissingFromTargetDescriptors(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestDiffProtoBundle_NotNullBackfill(t *testing.T) {
+	const bundle = "CREATE PROTO BUNDLE (pkg.Msg, pkg.Kind);\n"
+	both := protoDescriptors(msgA, kind)
+	runDiffTests(t, []diffTestCase{
+		{
+			name:            "add a NOT NULL message column",
+			from:            bundle + table,
+			to:              bundle + "CREATE TABLE t (id INT64 NOT NULL, m pkg.Msg NOT NULL) PRIMARY KEY (id);\n",
+			fromDescriptors: both, toDescriptors: both,
+			expected: []string{
+				`ALTER TABLE t ADD COLUMN m pkg.Msg NOT NULL DEFAULT (CAST("" AS pkg.Msg))`,
+				"ALTER TABLE t ALTER COLUMN m DROP DEFAULT",
+			},
+		},
+		{
+			name:            "add a NOT NULL enum column",
+			from:            bundle + table,
+			to:              bundle + "CREATE TABLE t (id INT64 NOT NULL, k pkg.Kind NOT NULL) PRIMARY KEY (id);\n",
+			fromDescriptors: both, toDescriptors: both,
+			expected: []string{
+				"ALTER TABLE t ADD COLUMN k pkg.Kind NOT NULL DEFAULT (CAST(0 AS pkg.Kind))",
+				"ALTER TABLE t ALTER COLUMN k DROP DEFAULT",
+			},
+		},
+		{
+			name:            "add a NOT NULL enum column whose first value is not zero",
+			from:            bundle + table,
+			to:              bundle + "CREATE TABLE t (id INT64 NOT NULL, k pkg.Kind NOT NULL) PRIMARY KEY (id);\n",
+			fromDescriptors: protoDescriptors(msgA, protoEnum("Kind", "ONE:1", "TWO:2")),
+			toDescriptors:   protoDescriptors(msgA, protoEnum("Kind", "ONE:1", "TWO:2")),
+			expected: []string{
+				"ALTER TABLE t ADD COLUMN k pkg.Kind NOT NULL DEFAULT (CAST(1 AS pkg.Kind))",
+				"ALTER TABLE t ALTER COLUMN k DROP DEFAULT",
+			},
+		},
+		{
+			name:            "an explicit DEFAULT wins",
+			from:            bundle + table,
+			to:              bundle + "CREATE TABLE t (id INT64 NOT NULL, k pkg.Kind NOT NULL DEFAULT (CAST(1 AS pkg.Kind))) PRIMARY KEY (id);\n",
+			fromDescriptors: both, toDescriptors: both,
+			expected: []string{"ALTER TABLE t ADD COLUMN k pkg.Kind NOT NULL DEFAULT (CAST(1 AS pkg.Kind))"},
+		},
+		{
+			name:            "add a NOT NULL array of messages",
+			from:            bundle + table,
+			to:              bundle + "CREATE TABLE t (id INT64 NOT NULL, ms ARRAY<pkg.Msg> NOT NULL) PRIMARY KEY (id);\n",
+			fromDescriptors: both, toDescriptors: both,
+			expected: []string{
+				"ALTER TABLE t ADD COLUMN ms ARRAY<pkg.Msg> NOT NULL DEFAULT (ARRAY[])",
+				"ALTER TABLE t ALTER COLUMN ms DROP DEFAULT",
+			},
+		},
+		{
+			name:            "set NOT NULL on a message column",
+			from:            bundle + tableM,
+			to:              bundle + "CREATE TABLE t (id INT64 NOT NULL, m pkg.Msg NOT NULL) PRIMARY KEY (id);\n",
+			fromDescriptors: both, toDescriptors: both,
+			expected: []string{
+				`UPDATE t SET m = CAST("" AS pkg.Msg) WHERE m IS NULL`,
+				"ALTER TABLE t ALTER COLUMN m pkg.Msg NOT NULL",
+			},
+		},
+		{
+			name:            "set NOT NULL on an enum column",
+			from:            bundle + "CREATE TABLE t (id INT64 NOT NULL, k pkg.Kind) PRIMARY KEY (id);\n",
+			to:              bundle + "CREATE TABLE t (id INT64 NOT NULL, k pkg.Kind NOT NULL) PRIMARY KEY (id);\n",
+			fromDescriptors: both, toDescriptors: both,
+			expected: []string{
+				"UPDATE t SET k = CAST(0 AS pkg.Kind) WHERE k IS NULL",
+				"ALTER TABLE t ALTER COLUMN k pkg.Kind NOT NULL",
+			},
+		},
+		{
+			name:            "a type missing from the descriptors",
+			from:            bundle + table,
+			to:              bundle + "CREATE TABLE t (id INT64 NOT NULL, m pkg.Gone NOT NULL) PRIMARY KEY (id);\n",
+			fromDescriptors: both, toDescriptors: both,
+			wantErr: "type pkg.Gone is not in the proto descriptors",
+		},
+		{
+			name:            "a message with a required field",
+			from:            bundle + table,
+			to:              bundle + "CREATE TABLE t (id INT64 NOT NULL, m pkg.Msg NOT NULL) PRIMARY KEY (id);\n",
+			fromDescriptors: both,
+			toDescriptors: protoDescriptors(&descriptorpb.DescriptorProto{Name: proto.String("Msg"), Field: []*descriptorpb.FieldDescriptorProto{{
+				Name: proto.String("a"), Number: proto.Int32(1), Type: descriptorpb.FieldDescriptorProto_TYPE_INT64.Enum(),
+				Label: descriptorpb.FieldDescriptorProto_LABEL_REQUIRED.Enum(),
+			}}}, kind),
+			wantErr: "type pkg.Msg needs an explicit DEFAULT",
+		},
+		{
+			name:    "no descriptors keeps the error",
+			from:    bundle + table,
+			to:      bundle + "CREATE TABLE t (id INT64 NOT NULL, m pkg.Msg NOT NULL) PRIMARY KEY (id);\n",
+			wantErr: "type pkg.Msg needs an explicit DEFAULT",
+		},
+	})
+}

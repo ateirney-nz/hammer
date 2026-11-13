@@ -51,6 +51,10 @@ var (
 			if err != nil {
 				return err
 			}
+			descriptors, err := cmd.Flags().GetString("proto-descriptors")
+			if err != nil {
+				return err
+			}
 			ddlOption := &hammer.DDLOption{
 				IgnoreAlterDatabase: ignoreAlterDatabase,
 				IgnoreChangeStreams: ignoreChangeStreams,
@@ -70,7 +74,7 @@ var (
 				return err
 			}
 
-			ddl, err := source.DDL(ctx, ddlOption)
+			ddl, err := readDDL(ctx, source, "proto-descriptors", descriptors, ddlOption)
 			if err != nil {
 				return err
 			}
@@ -84,6 +88,7 @@ func init() {
 	createCmd.Flags().Bool("ignore-change-streams", false, "ignore change streams statements")
 	createCmd.Flags().Bool("ignore-models", false, "ignore model statements")
 	createCmd.Flags().Bool("ignore-proto-bundles", false, "ignore proto bundle statements")
+	createCmd.Flags().String("proto-descriptors", "", "proto descriptors file (FileDescriptorSet) of SOURCE, a file or standard input")
 
 	rootCmd.AddCommand(createCmd)
 }

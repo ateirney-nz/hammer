@@ -109,8 +109,31 @@ apply, create, diff and export can accept the flags defined below
 --ignore-proto-bundles    ignore proto bundle statements
 ```
 
+`diff`, `apply` and `create` read the proto descriptors that `CREATE PROTO BUNDLE` needs (a
+serialized `FileDescriptorSet`, e.g. `buf build --as-file-descriptor-set` or
+`protoc --include_imports --descriptor_set_out`) from a file. A live database supplies its own.
+
+```
+--proto-descriptors FILE        descriptors of the last source: SOURCE2 of diff, SOURCE of apply and create
+--from-proto-descriptors FILE   descriptors of SOURCE1 of diff, when it is a file or standard input
+```
+
+The bundle is diffed as written: `CREATE PROTO BUNDLE`, `ALTER PROTO BUNDLE INSERT`, `UPDATE` and
+`DELETE`, or `DROP PROTO BUNDLE`. A type in both bundles is updated when its descriptors differ in what
+Spanner keeps; if either side has no descriptors for it, it is skipped and `diff` prints a `-- note:`.
+The descriptors are sent only with the statements that touch the bundle. With the descriptors, a new
+`NOT NULL` proto message or enum column is backfilled with `CAST("" AS pkg.Msg)` or the first enum value.
+`apply` refuses to run when a comparison was skipped; pass `--proto-descriptors`.
+`--ignore-proto-bundles` also ignores the descriptors.
+
+A type update that removes or changes a field runs after the other changes, so it cannot also add a
+field that a new column in the same diff reads; split it into two migrations.
+`ALTER PROTO BUNDLE DELETE` needs the deleted type in the descriptors, so keep it there until the
+`DELETE` is applied and remove it in a later migration.
+
 `diff` marks statements that lose data (dropping a table, column, queue or sequence, including the
-drop half of a drop and recreate, and adding or replacing a row deletion policy) with a `-- data loss: <reason>` comment. `apply` refuses to run
+drop half of a drop and recreate, adding or replacing a row deletion policy, and a bundle `UPDATE` that removes, renumbers or retypes a
+field or enum value or swaps message and enum) with a `-- data loss: <reason>` comment. `apply` refuses to run
 them unless given `--allow-data-loss`.
 
 ```

@@ -50,6 +50,10 @@ var (
 			if err != nil {
 				return err
 			}
+			descriptors, err := cmd.Flags().GetString("proto-descriptors")
+			if err != nil {
+				return err
+			}
 			ddlOption := &hammer.DDLOption{
 				IgnoreAlterDatabase: ignoreAlterDatabase,
 				IgnoreChangeStreams: ignoreChangeStreams,
@@ -73,7 +77,7 @@ var (
 			if err != nil {
 				return err
 			}
-			sourceDDL, err := source.DDL(ctx, ddlOption)
+			sourceDDL, err := readDDL(ctx, source, "proto-descriptors", descriptors, ddlOption)
 			if err != nil {
 				return err
 			}
@@ -81,6 +85,9 @@ var (
 			ddl, err := hammer.Diff(databaseDDL, sourceDDL)
 			if err != nil {
 				return err
+			}
+			if len(ddl.Notes) > 0 {
+				return fmt.Errorf("refusing to apply a diff that skipped comparisons, pass --proto-descriptors:\n  %s", strings.Join(ddl.Notes, "\n  "))
 			}
 			if len(ddl.List) == 0 {
 				return nil
@@ -112,6 +119,7 @@ func init() {
 	applyCmd.Flags().Bool("ignore-change-streams", false, "ignore change streams statements")
 	applyCmd.Flags().Bool("ignore-models", false, "ignore model statements")
 	applyCmd.Flags().Bool("ignore-proto-bundles", false, "ignore proto bundle statements")
+	applyCmd.Flags().String("proto-descriptors", "", "proto descriptors file (FileDescriptorSet) of SOURCE, a file or standard input")
 
 	rootCmd.AddCommand(applyCmd)
 }

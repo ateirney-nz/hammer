@@ -1135,11 +1135,11 @@ func (g *Generator) generateDDLForColumns(from, to *Table) (DDL, error) {
 			}
 			if !fromCol.NotNull && toCol.NotNull {
 				if toCol.DefaultSemantics == nil {
-					if _, err := withZeroDefault(toCol); err != nil {
+					if _, err := withZeroDefault(toCol, g.to.protoTypes); err != nil {
 						return DDL{}, fmt.Errorf("setting NOT NULL on column %s.%s: %w", to.Name.SQL(), toCol.Name.SQL(), err)
 					}
 				}
-				ddl.Append(Update{Table: to.Name.SQL(), Def: toCol})
+				ddl.Append(Update{Table: to.Name.SQL(), Def: toCol, Types: g.to.protoTypes})
 			}
 			ddl.Append(AlterColumn{Table: to.Name.SQL(), Def: toCol})
 		}
@@ -1282,7 +1282,7 @@ func (g *Generator) generateDDLForAddColumn(table *ast.Path, col *ast.ColumnDef)
 		return ddl, nil
 	}
 	// A NOT NULL column needs a default to fill existing rows.
-	withDefault, err := withZeroDefault(col)
+	withDefault, err := withZeroDefault(col, g.to.protoTypes)
 	if err != nil {
 		return DDL{}, fmt.Errorf("adding NOT NULL column %s.%s: %w", table.SQL(), col.Name.SQL(), err)
 	}
@@ -1963,7 +1963,7 @@ func zeroUUID(t *ast.NamedType) ast.Expr {
 	return &ast.CastExpr{Expr: &ast.StringLiteral{Value: "00000000-0000-0000-0000-000000000000"}, Type: t}
 }
 
-func withZeroDefault(col *ast.ColumnDef) (*ast.ColumnDef, error) {
+func withZeroDefault(col *ast.ColumnDef, types protoTypes) (*ast.ColumnDef, error) {
 	c := *col
 	switch t := col.Type.(type) {
 	case *ast.ArraySchemaType:
@@ -1973,10 +1973,15 @@ func withZeroDefault(col *ast.ColumnDef) (*ast.ColumnDef, error) {
 	case *ast.SizedSchemaType:
 		c.DefaultSemantics = &ast.ColumnDefaultExpr{Expr: defaultByScalarTypeName(t.Name)}
 	case *ast.NamedType:
-		if !isUUID(t) {
-			return nil, fmt.Errorf("type %s needs an explicit DEFAULT", t.SQL())
+		if isUUID(t) {
+			c.DefaultSemantics = &ast.ColumnDefaultExpr{Expr: zeroUUID(t)}
+			break
 		}
-		c.DefaultSemantics = &ast.ColumnDefaultExpr{Expr: zeroUUID(t)}
+		zero, err := types.zeroValue(t)
+		if err != nil {
+			return nil, err
+		}
+		c.DefaultSemantics = &ast.ColumnDefaultExpr{Expr: zero}
 	}
 	return &c, nil
 }

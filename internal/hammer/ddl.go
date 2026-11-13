@@ -134,6 +134,7 @@ func (a AlterColumn) SQL() string {
 type Update struct {
 	Table string
 	Def   *ast.ColumnDef
+	Types protoTypes // describes a proto or enum column; without it the backfill is ''
 }
 
 func (u Update) defaultValue() string {
@@ -154,6 +155,9 @@ func (u Update) defaultValue() string {
 	case *ast.NamedType:
 		if isUUID(t) {
 			return zeroUUID(t).SQL()
+		}
+		if zero, err := u.Types.zeroValue(t); err == nil {
+			return zero.SQL()
 		}
 		return "''"
 	default:
